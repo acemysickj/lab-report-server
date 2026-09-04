@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { openDatabase } from '../src/db.js';
-import { migrate, MIGRATIONS_DIR } from '../scripts/migrate.js';
+import { migrate, listMigrations, MIGRATIONS_DIR } from '../scripts/migrate.js';
 
 const FROZEN_TABLES = [
   'users',
@@ -29,8 +29,9 @@ test('migrate creates all 8 frozen tables and is idempotent on re-run', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-migrate-'));
   const db = openDatabase({ dataDir: tmp });
   try {
+    const expected = listMigrations(MIGRATIONS_DIR);
     const first = migrate(db, MIGRATIONS_DIR);
-    assert.deepEqual(first.applied, ['0001_init.sql']);
+    assert.deepEqual(first.applied, expected);
 
     const tables = tableNames(db);
     for (const t of FROZEN_TABLES) {
@@ -41,8 +42,10 @@ test('migrate creates all 8 frozen tables and is idempotent on re-run', () => {
     assert.deepEqual(second.applied, [], 'second run should apply nothing');
 
     const ledger = db.prepare('SELECT name FROM _migrations ORDER BY name').all();
-    assert.equal(ledger.length, 1);
-    assert.equal(ledger[0].name, '0001_init.sql');
+    assert.deepEqual(
+      ledger.map((r) => r.name),
+      expected
+    );
 
     // 幂等重跑后表仍然完整
     const tablesAfter = tableNames(db);

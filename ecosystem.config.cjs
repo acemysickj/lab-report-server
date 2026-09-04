@@ -14,6 +14,7 @@ module.exports = {
         HOST: '127.0.0.1',   // 契约：只监听 127.0.0.1，不暴露公网（Nginx 在前）
         PORT: '3000',
         DATA_DIR: './data',
+        // AUTH_JWT_SECRET：生产由部署环境注入（≥32 字符，只存服务器环境，不入 git）
       },
       out_file: 'logs/pm2-out.log',
       error_file: 'logs/pm2-error.log',

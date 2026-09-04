@@ -32,6 +32,24 @@ PM2 方式：`pm2 start ecosystem.config.cjs` → `pm2 reload lab-report-server`
 | `DATA_DIR` | `./data` | SQLite 数据目录（自动创建），db 文件 `app.db` |
 | `HOST` | `127.0.0.1` | 监听地址（生产保持 127.0.0.1，由 Nginx 反代） |
 | `PORT` | `3000` | 监听端口 |
+| `AUTH_JWT_SECRET` | （无） | JWT 签名密钥，≥32 字符；生产必填（只存服务器环境），开发缺省时用临时密钥并告警 |
+| `LEGAL_DOCS_DIR` | `./docs/legal` | 法务文档目录（/legal/privacy、/legal/terms 直出） |
+
+## 认证（COM-002）
+
+- `POST /api/v1/auth/register`：邮箱即用户名 + 密码（Argon2id）；body 须含 `consent`
+  （两项勾选 true + 所同意的文档版本，P-001/P-002）；未勾选→400，版本不符→400，
+  邮箱重复→409；consent 版本与时间落 `users` 表可追溯。
+- `POST /api/v1/auth/login`：返回 `accessToken`(JWT 15min，payload 仅 sub/sid/iat/exp) +
+  `refreshToken`(32B 随机串，库中只存 SHA-256 摘要) + `expiresIn`。
+- `POST /api/v1/auth/refresh`：Rotation；**旧 refresh 重放 → 整 token family 作废**（复用检测）。
+- `POST /api/v1/auth/logout`：Bearer；当前 family 整族作废（access 随 session 失效）。
+- `DELETE /api/v1/account`：Bearer + 密码确认；P-007 注销——删会话与用户数据、
+  脱敏身份字段（consent 留痕保留），`credit_ledger`/`orders` 等账务记录保留。
+- `GET /legal/privacy`、`GET /legal/terms`：直出 `docs/legal/*.md`（v1.0-draft）。
+- `GET /api/v1/auth/consent-versions`：当前文档版本（客户端注册页引用）。
+- 所有响应回显 `x-request-id`（客户端带则沿用，缺失服务端生成）。
+- 限流（并发/每分钟/每小时）按契约由 COM-005 统一挂载，本模块未实现。
 
 ## 迁移机制
 

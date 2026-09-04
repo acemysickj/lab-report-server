@@ -1,15 +1,80 @@
-// src/app.js — Fastify application factory (COM-001 skeleton)
-// 契约：Fastify 只监听 127.0.0.1（见 src/server.js）；GET /health → 200 {"status":"ok"}。
+// src/app.js — Fastify 应用工厂（COM-001 骨架 + COM-002 Auth 装配根）
+// 契约：只监听 127.0.0.1（src/server.js）；X-Request-Id 所有请求必备（缺失则服务端生成）；
+//       Fastify logger redact body——本骨架默认关闭请求日志，任何日志不得输出请求正文（P-005）。
+import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
 import { openDatabase } from './db.js';
+import { verifyAccessToken } from './lib/tokens.js';
+import { httpError } from './lib/http-error.js';
+import { findUserById } from './repositories/user.repository.js';
+import { findSessionById } from './repositories/session.repository.js';
+import authRoutes from './routes/auth.js';
+import legalRoutes from './routes/legal.js';
 
 /** Build the Fastify app. Options: { dataDir?, db?, logger? }. Pass db to reuse a connection (tests). */
 export async function buildApp(options = {}) {
   const db = options.db ?? openDatabase({ dataDir: options.dataDir });
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    // 契约：X-Request-Id 所有请求必备——客户端带则沿用，缺失由服务端生成
+    genReqId: (req) => {
+      const provided = req.headers['x-request-id'];
+      return typeof provided === 'string' && provided.length >= 8 && provided.length <= 128
+        ? provided
+        : randomUUID();
+    },
+  });
   app.decorate('db', db);
+  app.decorateRequest('user', null);
+  app.decorateRequest('session', null);
+
+  // 回显请求标识（所有响应必备）
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('x-request-id', request.id);
+  });
+
+  // Access Token 校验：JWT 有效 + 会话未作废（登出/复用检测会置 revoked_at → access 立即失效）
+  app.decorate('authenticate', async function authenticate(request) {
+    const header = request.headers.authorization;
+    if (typeof header !== 'string' || !header.startsWith('Bearer ')) {
+      throw httpError(401, 'missing_token', '缺少 Access Token');
+    }
+    let payload;
+    try {
+      payload = await verifyAccessToken(header.slice('Bearer '.length));
+    } catch {
+      throw httpError(401, 'invalid_token', 'Access Token 无效或已过期');
+    }
+    const session = findSessionById(app.db, payload.sessionId);
+    if (!session || session.revoked_at !== null) {
+      throw httpError(401, 'session_revoked', '会话已作废，请重新登录');
+    }
+    const user = findUserById(app.db, payload.userId);
+    if (!user || user.status !== 'active') {
+      throw httpError(401, 'account_unavailable', '账号不可用');
+    }
+    request.session = session; // 内部使用，勿直接序列化进响应
+    request.user = user;       // 同上
+  });
+
+  // 统一错误整形；5xx 不回显内部细节，任何情况下不输出请求正文
+  app.setErrorHandler((err, request, reply) => {
+    const status = err.statusCode ?? 500;
+    const code = err.code ?? (status >= 500 ? 'internal_error' : 'request_failed');
+    if (status >= 500) request.log.error({ err: err.message, code }, 'internal error');
+    reply.status(status).send({
+      error: {
+        code,
+        message: status >= 500 ? 'Internal Server Error' : (err.message ?? code),
+        requestId: request.id,
+      },
+    });
+  });
 
   app.get('/health', async () => ({ status: 'ok' }));
+
+  await app.register(authRoutes, { prefix: '/api/v1' });
+  await app.register(legalRoutes);
 
   app.addHook('onClose', async () => {
     if (db.open) db.close();
