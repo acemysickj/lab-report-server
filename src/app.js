@@ -10,6 +10,7 @@ import { findUserById } from './repositories/user.repository.js';
 import { findSessionById } from './repositories/session.repository.js';
 import authRoutes from './routes/auth.js';
 import legalRoutes from './routes/legal.js';
+import walletRoutes from './routes/wallet.js';
 
 /** Build the Fastify app. Options: { dataDir?, db?, logger? }. Pass db to reuse a connection (tests). */
 export async function buildApp(options = {}) {
@@ -74,6 +75,7 @@ export async function buildApp(options = {}) {
   app.get('/health', async () => ({ status: 'ok' }));
 
   await app.register(authRoutes, { prefix: '/api/v1' });
+  await app.register(walletRoutes, { prefix: '/api/v1' });
   await app.register(legalRoutes);
 
   app.addHook('onClose', async () => {

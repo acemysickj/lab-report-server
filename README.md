@@ -47,6 +47,23 @@ PM2 方式：`pm2 start ecosystem.config.cjs` → `pm2 reload lab-report-server`
 - `DELETE /api/v1/account`：Bearer + 密码确认；P-007 注销——删会话与用户数据、
   脱敏身份字段（consent 留痕保留），`credit_ledger`/`orders` 等账务记录保留。
 - `GET /legal/privacy`、`GET /legal/terms`：直出 `docs/legal/*.md`（v1.0-draft）。
+
+## 钱包（COM-003）
+
+- **读接口**：`GET /api/v1/wallet/balance`（auth，返回 balance/openReservations/available，
+  可用=balance−未结预扣）；`GET /api/v1/wallet/ledger`（auth，游标分页 limit/beforeId，
+  流水含 delta 与 balanceAfter）；`GET /api/v1/wallet/tiers`（9.9→100 / 29.9→350 / 49.9→700
+  主推）；`GET /api/v1/wallet/estimate?operation=…`（预计消耗；未知操作 400）。
+- **服务层（写路径，仅供 COM-004 AI Gateway / COM-005 Admin 服务端调用，不经客户端）**：
+  `grantCredits`（订单履约：pending→delivered + purchase 流水）、`reserveCredits →
+  settleReservation / releaseReservation`（两段式原子消费，全程 better-sqlite3 同步事务；
+  不足 402 且无部分扣减）、`refundCredits`（refund 流水）、`runIdempotent`
+  （idempotency_keys：user+operation+key 唯一，result_ref 重放同结果，不二次扣费）。
+- **定价服务端权威**：`src/wallet/pricing.js` 是唯一价格来源（generate_section=5、
+  generate_chart=3、parse_template/search_lecture 免费）；客户端传 credits/model/price
+  一律无效——服务层签名无金额入口。
+- **注销收尾（P-007）**：`deleteAccount` 删除事务内原子执行：未结预扣全部置 released +
+  余额清零 + `adjust` 流水（balance_after=0），账务逐笔可对。
 - `GET /api/v1/auth/consent-versions`：当前文档版本（客户端注册页引用）。
 - 所有响应回显 `x-request-id`（客户端带则沿用，缺失服务端生成）。
 - 限流（并发/每分钟/每小时）按契约由 COM-005 统一挂载，本模块未实现。

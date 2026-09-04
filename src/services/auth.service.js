@@ -29,6 +29,7 @@ import {
   revokeFamily,
   deleteSessionsForUser,
 } from '../repositories/session.repository.js';
+import { closeoutForDeletion } from './wallet.service.js';
 
 const nowIso = () => new Date().toISOString();
 const plusSeconds = (seconds) => new Date(Date.now() + seconds * 1000).toISOString();
@@ -155,12 +156,10 @@ export async function deleteAccount(db, { user, password }) {
     deleteSessionsForUser(db, userId);                       // 删会话
     db.prepare('DELETE FROM idempotency_keys WHERE user_id = ?').run(userId); // 删用户数据
     db.prepare('DELETE FROM ai_jobs WHERE user_id = ?').run(userId);          // 删 AI 任务元数据（account-deletion.md §3.2）
+    closeoutForDeletion(db, userId);                                          // 注销收尾（COM-003）：释放未结预扣 + 余额清零 + adjust 流水——同事务原子
     anonymizeUser(db, userId, `deleted+${randomUUID()}@deleted.invalid`);     // 脱敏资料（consent 留痕）
     // 保留（依法账务留存，P-007「保留交易必要账务记录」，account-deletion.md §3.2）：
-    //   accounts / credit_ledger / credit_reservations / orders
-    // COM-003 注销收尾（届时并入本事务原子执行）：
-    //   accounts 余额清零 + credit_ledger 记 adjust 流水（推荐方案，账务可审计）；
-    //   credit_reservations 释放/核销后清理。
+    //   accounts（已清零）/ credit_ledger（含注销 adjust 收尾流水）/ credit_reservations（已全部终态）/ orders
   });
   tx(user.id);
 }
