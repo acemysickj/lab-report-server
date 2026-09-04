@@ -108,6 +108,3 @@ test/               # node --test 测试套件
 ecosystem.config.cjs# PM2 配置（fork 单实例 / 512M）
 docs/COM-CONTRACT.md# 冻结契约（唯一权威）
 ```
-=======
-这是lab-report-assistant的服务器代理仓库
->>>>>>> origin/main
