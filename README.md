@@ -1,5 +1,7 @@
 # lab-report-server
 
+这是 lab-report-assistant 的服务器代理仓库。
+
 v0.10.0 Commercial Core 服务端。**唯一权威契约：[docs/COM-CONTRACT.md](docs/COM-CONTRACT.md)（FROZEN）**——一切实现不得越出契约；架构变更（换数据库/中间件等）须报队长裁决。
 
 ## 技术栈（契约冻结）
@@ -106,3 +108,6 @@ test/               # node --test 测试套件
 ecosystem.config.cjs# PM2 配置（fork 单实例 / 512M）
 docs/COM-CONTRACT.md# 冻结契约（唯一权威）
 ```
+=======
+这是lab-report-assistant的服务器代理仓库
+>>>>>>> origin/main
