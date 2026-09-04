@@ -32,3 +32,22 @@ function resolveJwtSecret() {
 }
 
 export const AUTH_JWT_SECRET = resolveJwtSecret();
+
+// ---- COM-005：限流口径（契约风控：并发 2 / 每分钟 10 / 每小时 50，后台可调=env 重启生效） ----
+function positiveIntEnv(name, fallback) {
+  const raw = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(raw) && raw > 0 ? raw : fallback;
+}
+export const RATE_LIMITS = {
+  maxConcurrent: positiveIntEnv('RATE_MAX_CONCURRENT', 2),
+  perMinute: positiveIntEnv('RATE_PER_MINUTE', 10),
+  perHour: positiveIntEnv('RATE_PER_HOUR', 50),
+};
+
+// ---- COM-005：极简 Admin（未配置即整体隐藏；只存服务器环境，不入 git） ----
+export const ADMIN_TOKEN = process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN.length >= 16
+  ? process.env.ADMIN_TOKEN
+  : null;
+
+// ---- COM-004：上游传输超时（毫秒） ----
+export const AI_UPSTREAM_TIMEOUT_MS = positiveIntEnv('AI_UPSTREAM_TIMEOUT_MS', 60000);

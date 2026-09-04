@@ -67,54 +67,71 @@ export default async function aiRoutes(app) {
         });
       }
 
-      const { operation, payload, idempotencyKey } = request.body;
-      const { replayed, job } = gateway.createJob(app.db, {
-        userId: request.user.id,
-        operation,
-        payload,
-        idempotencyKey,
-        requestId: request.id,
-      });
+      // COM-005 限流（契约风控：并发 2 / 每分钟 10 / 每小时 50）——hijack 前 429 JSON 整形
+      const acquire = app.aiRateLimiter.tryAcquire(request.user.id);
+      if (!acquire.ok) {
+        const scopeText = acquire.scope === 'concurrent' ? '并发任务数达上限' : acquire.scope === 'minute' ? '每分钟请求数达上限' : '每小时请求数达上限';
+        return reply
+          .code(429)
+          .header('retry-after', String(acquire.retryAfterSeconds))
+          .send({
+            error: { code: 'rate_limited', message: `${scopeText}，请 ${acquire.retryAfterSeconds} 秒后重试`, scope: acquire.scope, retryAfter: acquire.retryAfterSeconds, requestId: request.id },
+          });
+      }
 
-      reply.hijack();
-      const raw = reply.raw;
-      raw.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
-        'x-request-id': request.id,
-        'x-job-id': job.jobId, // 裁决③：jobId 首字节前即可得（客户端断线续存用）
-      });
+      try {
+        const { operation, payload, idempotencyKey } = request.body;
+        const { replayed, job } = gateway.createJob(app.db, {
+          userId: request.user.id,
+          operation,
+          payload,
+          idempotencyKey,
+          requestId: request.id,
+        });
 
-      sseSend(raw, 'job', { jobId: job.jobId, replayed: Boolean(replayed) });
+        reply.hijack();
+        const raw = reply.raw;
+        raw.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+          'x-request-id': request.id,
+          'x-job-id': job.jobId, // 裁决③：jobId 首字节前即可得（客户端断线续存用）
+        });
 
-      if (replayed) {
-        // 幂等重放：不重新执行（正文从不落盘，无法重放内容）；回执原 jobId 与其终态。
-        // done 事件带 model/credits（来自任务行），无 textLength——正文从不落盘，无从统计
-        sseSend(raw, 'done', {
-          jobId: job.jobId,
-          replayed: true,
-          status: job.status,
-          model: job.model ?? null,
-          credits: job.creditsCharged ?? null,
+        sseSend(raw, 'job', { jobId: job.jobId, replayed: Boolean(replayed) });
+
+        if (replayed) {
+          // 幂等重放：不重新执行（正文从不落盘，无法重放内容）；回执原 jobId 与其终态。
+          // done 事件带 model/credits（来自任务行），无 textLength——正文从不落盘，无从统计
+          sseSend(raw, 'done', {
+            jobId: job.jobId,
+            replayed: true,
+            status: job.status,
+            model: job.model ?? null,
+            credits: job.creditsCharged ?? null,
+          });
+          sseDone(raw);
+          raw.end();
+          return;
+        }
+
+        await gateway.executeJob(app.db, {
+          job,
+          payload,
+          transport: app.aiTransport,
+          contentCache: app.aiContentCache,
+          usageMeter: app.aiUsageMeter,
+          onEvent: (event, data) => {
+            if (event === 'part') sseContentChunk(raw, job.jobId, data.text);
+            else sseSend(raw, event, data);
+          },
         });
         sseDone(raw);
         raw.end();
-        return;
+      } finally {
+        app.aiRateLimiter.release(request.user.id); // 并发槽必释（成功/失败/断线）
       }
-
-      await gateway.executeJob(app.db, {
-        job,
-        payload,
-        transport: app.aiTransport,
-        contentCache: app.aiContentCache,
-        onEvent: (event, data) => {
-          if (event === 'part') sseContentChunk(raw, job.jobId, data.text);
-          else sseSend(raw, event, data);
-        },
-      });
-      sseDone(raw);
-      raw.end();
     },
   });
 

@@ -1,0 +1,34 @@
+# deploy/nginx-lab-report.conf.example — Nginx 反代示例（复制到 /etc/nginx/sites-available/ 后改域名/证书路径）
+# 契约要点：Fastify 只听 127.0.0.1；SSE 三件套（Connection'' / proxy_buffering off / read_timeout）缺一不可；
+# Nginx 不记录 request body（契约 P-005）——access_log 仅记基础行。
+
+server {
+    listen 80;
+    server_name _;                 # 备案前的 IP 联调口径；域名就绪后改为域名并切 443
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_set_header X-Request-Id $http_x_request_id;
+        proxy_buffering off;       # SSE 实时透传
+        proxy_read_timeout 300s;   # AI 长任务流
+        access_log off;
+    }
+
+    # 客户端自动更新静态源（v0.10.0 起 app-update.yml 烧入 https://<域名>/updates/）
+    location /updates/ {
+        alias /srv/lab-report-server/updates/;   # 存放 latest.yml + blockmap + exe
+        autoindex off;
+    }
+}
+
+# 域名+ICP 备案就绪后的 443 版本（acme.sh 签发证书后启用）：
+# server {
+#     listen 443 ssl;
+#     server_name <域名>;
+#     ssl_certificate     ~/.acme.sh/<域名>_ecc/fullchain.cer;
+#     ssl_certificate_key ~/.acme.sh/<域名>_ecc/<域名>.key;
+#     location / { ...同上 proxy 配置... }
+#     location /updates/ { ...同上... }
+# }

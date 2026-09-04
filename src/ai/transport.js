@@ -19,7 +19,7 @@ export function createHttpTransport(options = {}) {
      * 失败（网络/非 2xx/流中断）抛 Error（statusCode 分类用 err.code：network / http_<status>）。
      * 正文只在此层内存流转，绝不写日志/库/dump。
      */
-    async *stream(model, payload) {
+    async *stream(model, payload, { onUsage } = {}) {
       if (!this.available) {
         const err = new Error('AI upstream not configured');
         err.code = 'ai_not_configured';
@@ -36,6 +36,8 @@ export function createHttpTransport(options = {}) {
           model,
           stream: true,
           messages,
+          // COM-005 成本计量：上游在终止前回传 usage 块（choices 为空的附加 chunk）
+          stream_options: { include_usage: true },
           ...(temperature !== undefined ? { temperature } : {}),
         }),
         signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -45,7 +47,7 @@ export function createHttpTransport(options = {}) {
         err.code = `http_${response.status}`;
         throw err;
       }
-      for await (const delta of parseUpstreamSse(response.body)) {
+      for await (const delta of parseUpstreamSse(response.body, onUsage)) {
         yield delta; // 仅内存/SSE 转发，不落盘
       }
     },
@@ -76,8 +78,8 @@ export function buildUpstreamRequest(payload) {
   return { messages, temperature };
 }
 
-/** 解析上游 OpenAI 兼容 SSE：data: {...choices[0].delta.content...} / data: [DONE]。 */
-async function* parseUpstreamSse(body) {
+/** 解析上游 OpenAI 兼容 SSE：data: {...choices[0].delta.content...} / usage 块 / data: [DONE]。 */
+async function* parseUpstreamSse(body, onUsage) {
   const decoder = new TextDecoder();
   let buffer = '';
   let done = false;
@@ -95,6 +97,11 @@ async function* parseUpstreamSse(body) {
       }
       try {
         const parsed = JSON.parse(data);
+        // usage 块（stream_options.include_usage）：choices 为空、usage 在根上——只回调，不当正文
+        if (parsed && parsed.usage && typeof onUsage === 'function') {
+          onUsage(parsed.usage);
+          continue;
+        }
         const delta = parsed?.choices?.[0]?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) yield delta;
       } catch {

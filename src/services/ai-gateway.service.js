@@ -84,10 +84,13 @@ function createJobOnce(db, { userId, operation, payload, requestId }) {
  * 失败按 L3 补偿（未核销→release+failed；已核销→refund+refunded）。
  * onEvent(type, data) 只收元数据与文本增量（SSE 通道，不落盘）。
  */
-export async function executeJob(db, { job, payload, transport, onEvent, contentCache }) {
+export async function executeJob(db, { job, payload, transport, onEvent, contentCache, usageMeter }) {
   const { jobId, reservationId } = job;
   let settled = false;
   let settledAmount = null;
+  const startedAt = Date.now();
+  const usageAcc = { promptTokens: 0, completionTokens: 0 }; // COM-005：跨主备尝试累计（失败尝试的 token 同样产生成本）
+  let lastModel = null;
   try {
     if (transport && transport.available === false) {
       throw httpError(503, 'ai_not_configured', 'AI 服务未配置（DEEPSEEK_API_KEY 缺失）');
@@ -95,14 +98,23 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
     let lastError = null;
     for (const model of modelChain()) {
       let emitted = false; // 本模型是否已向客户端发出过正文增量（try/catch 块外声明，catch 可见）
+      lastModel = model;
+      const attemptUsage = { promptTokens: 0, completionTokens: 0 };
       try {
         let text = '';
         jobRepo.updateJobModel(db, { jobId, model });
-        for await (const delta of transport.stream(model, payload)) {
+        for await (const delta of transport.stream(model, payload, {
+          onUsage: (u) => {
+            attemptUsage.promptTokens += Number(u?.prompt_tokens) || 0;
+            attemptUsage.completionTokens += Number(u?.completion_tokens) || 0;
+          },
+        })) {
           text += delta;
           emitted = true;
           onEvent('part', { text: delta }); // 正文仅进 SSE
         }
+        usageAcc.promptTokens += attemptUsage.promptTokens;
+        usageAcc.completionTokens += attemptUsage.completionTokens;
         // 流完整结束 → 核销扣费（此后失败走 refund 补偿）
         const settle = settleReservation(db, { reservationId, jobId });
         settled = true;
@@ -110,10 +122,26 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
         jobRepo.markJobStatus(db, { jobId, status: 'completed', creditsCharged: settle.amount });
         // 裁决③：全文只进进程内存缓存（有界 TTL），供断线后 GET /jobs/:id/content 取回
         if (contentCache) contentCache.put(jobId, text);
+        // COM-005 成本计量：仅元数据进内存环（token/时长/扣费），正文绝不入计量（P-005/P-006）
+        if (usageMeter) {
+          usageMeter.record({
+            jobId,
+            userId: job.userId ?? job.user_id,
+            operation: job.operation,
+            model,
+            promptTokens: usageAcc.promptTokens,
+            completionTokens: usageAcc.completionTokens,
+            durationMs: Date.now() - startedAt,
+            credits: settle.amount,
+          });
+        }
         onEvent('done', { jobId, model, credits: settle.amount, textLength: text.length });
         return { status: 'completed', model, credits: settle.amount, textLength: text.length };
       } catch (err) {
         lastError = err;
+        // 失败尝试同样产生上游成本——计入累计后再决定重试/失败
+        usageAcc.promptTokens += attemptUsage.promptTokens;
+        usageAcc.completionTokens += attemptUsage.completionTokens;
         if (emitted) {
           // 半途失败：fallback 会重跑全量造成「半截+全文」拼接污染，正文只能不重试——
           // 直接走失败路径（release），宁失败不串文
@@ -124,6 +152,19 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
     }
     throw classifyUpstreamError(lastError);
   } catch (err) {
+    // COM-005：失败任务同样计入成本观测（credits 记已结算额——若 settled 后补偿，用户侧已退）
+    if (usageMeter) {
+      usageMeter.record({
+        jobId,
+        userId: job.userId ?? job.user_id,
+        operation: job.operation,
+        model: lastModel,
+        promptTokens: usageAcc.promptTokens,
+        completionTokens: usageAcc.completionTokens,
+        durationMs: Date.now() - startedAt,
+        credits: settledAmount ?? 0,
+      });
+    }
     // L3 补偿：先补偿再抛错/上报（refundAmount 用内存中的结算金额，不依赖回库读值）
     compensate(db, { jobId, reservationId, settled, refundAmount: settledAmount, errorCode: err.code ?? 'ai_failed' });
     onEvent('error', { code: err.code ?? 'ai_failed', jobId }); // 只含错误码+jobId（P-005）

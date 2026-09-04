@@ -8,12 +8,16 @@ import { verifyAccessToken } from './lib/tokens.js';
 import { httpError } from './lib/http-error.js';
 import { findUserById } from './repositories/user.repository.js';
 import { findSessionById } from './repositories/session.repository.js';
+import { RATE_LIMITS, ADMIN_TOKEN } from './config.js';
 import authRoutes from './routes/auth.js';
 import legalRoutes from './routes/legal.js';
 import walletRoutes from './routes/wallet.js';
 import aiRoutes from './routes/ai.js';
+import adminRoutes from './routes/admin.js';
 import { createHttpTransport } from './ai/transport.js';
 import { createContentCache } from './ai/content-cache.js';
+import { createRateLimiter } from './ai/rate-limiter.js';
+import { createUsageMeter } from './ai/usage-meter.js';
 
 /** Build the Fastify app. Options: { dataDir?, db?, logger? }. Pass db to reuse a connection (tests). */
 export async function buildApp(options = {}) {
@@ -37,6 +41,12 @@ export async function buildApp(options = {}) {
   app.decorate('aiTransport', options.aiTransport ?? createHttpTransport());
   // COM-004 裁决③：已完成任务全文取回的进程内缓存（非持久化，P-006 边界）
   app.decorate('aiContentCache', options.aiContentCache ?? createContentCache());
+  // COM-005：限流（契约风控 2/10/50，env 可调）+ 成本计量（进程内环形，观测用）+ Admin 令牌
+  app.decorate('aiRateLimiter', options.aiRateLimiter ?? createRateLimiter(options.rateLimits ?? RATE_LIMITS));
+  app.decorate('aiUsageMeter', options.aiUsageMeter ?? createUsageMeter());
+  // 注意：显式传 null = 关闭 Admin（?? 会放过 null，需区分 undefined）
+  const adminToken = options.adminToken !== undefined ? options.adminToken : ADMIN_TOKEN;
+  app.decorate('adminToken', adminToken);
   app.decorateRequest('user', null);
   app.decorateRequest('session', null);
 
@@ -88,6 +98,7 @@ export async function buildApp(options = {}) {
   await app.register(authRoutes, { prefix: '/api/v1' });
   await app.register(walletRoutes, { prefix: '/api/v1' });
   await app.register(aiRoutes, { prefix: '/api/v1' });
+  await app.register(adminRoutes, { prefix: '/api/v1', adminToken });
   await app.register(legalRoutes);
 
   app.addHook('onClose', async () => {

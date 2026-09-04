@@ -21,6 +21,8 @@ git fetch --depth 1 origin tag <TAG> && git checkout <TAG>   # 首次直接拉 t
 |---|---|
 | `AUTH_JWT_SECRET` | ≥32 字符随机串（`openssl rand -hex 32`），泄露=全体会话可伪造 |
 | `DEEPSEEK_API_KEY` | DeepSeek 平台专用 key（非日常开发 key，只存服务器） |
+| `ADMIN_TOKEN` | ≥16 字符随机串；**未配置=Admin 端点整体 404 隐藏**（发放额度走此令牌） |
+| `RATE_MAX_CONCURRENT` / `RATE_PER_MINUTE` / `RATE_PER_HOUR` | 契约风控默认 2/10/50，后台可调（改 env 重启生效） |
 | `DATA_DIR` | `/srv/lab-report-server/data`（默认 `./data` 亦可，二者取一固定） |
 | `PORT` / `HOST` | `3000` / `127.0.0.1`（ecosystem.config.cjs 已固化；Fastify 绝不直接暴露公网） |
 
@@ -82,5 +84,6 @@ server {
 
 ## 5. 已知边界
 
-- 首个账号的额度发放：支付渠道后置（COM-005 Admin 未至），本地/测试用 `scripts/grant-dev-credits.js`（仅限开发环境，不得用于生产）。
+- 首个账号的额度发放：`curl -X POST https://<域名>/api/v1/admin/grant -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"email":"...","tier":"tier_49_9"}'`（生产）；本地/测试亦可用 `scripts/grant-dev-credits.js`。
 - `AUTH_JWT_SECRET` 换新 = 全体登录态失效（客户端需重新登录），属预期行为。
+- 成本计量（/admin/usage）为进程内环形观测（重启清零），非计费权威——成本权威=DeepSeek 控制台账。

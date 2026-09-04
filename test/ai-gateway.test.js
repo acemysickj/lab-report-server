@@ -56,9 +56,9 @@ function makeCache(overrides = {}) {
   return createContentCache({ maxEntries: 100, ...overrides });
 }
 
-async function makeApp({ transport = fakeTransport(), logger = false, aiContentCache = makeCache() } = {}) {
+async function makeApp({ transport = fakeTransport(), logger = false, aiContentCache = makeCache(), rateLimits } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-ai-'));
-  const app = await buildApp({ dataDir: tmp, aiTransport: transport, aiContentCache, logger });
+  const app = await buildApp({ dataDir: tmp, aiTransport: transport, aiContentCache, logger, rateLimits });
   await migrate(app.db);
   return { app, tmp, aiContentCache };
 }
@@ -529,11 +529,51 @@ test('free operation cannot go through gateway; unknown operation 400', async ()
   }
 });
 
-test('transport 上游请求形状：messages 组装 + temperature + SSE 增量解析', async () => {
+test('COM-005 usage meter：完成任务计入计量环（token 缺省 0，credits 入账）', async () => {
+  const { app, tmp } = await makeApp();
+  try {
+    const { token } = await registerLoginFund(app);
+    await postJob(app, token);
+    const snap = app.aiUsageMeter.snapshot();
+    assert.equal(snap.totals.jobs, 1);
+    assert.equal(snap.totals.credits, PRICING.generate_section);
+    assert.equal(snap.recent[0].model, MODEL_MAP.primary);
+    assert.ok(snap.recent[0].durationMs >= 0);
+    // fake transport 不回 usage 块 → token 记 0
+    assert.equal(snap.totals.promptTokens, 0);
+  } finally {
+    await app.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('COM-005 限流：超过 perMinute 429（rate_limited + retry-after），hijack 前 JSON', async () => {
+  const { app, tmp } = await makeApp({ rateLimits: { maxConcurrent: 9, perMinute: 2, perHour: 99 } });
+  try {
+    const { token } = await registerLoginFund(app);
+    const first = await postJob(app, token);
+    assert.equal(first.statusCode, 200);
+    const second = await postJob(app, token, { payload: { user: '第二条' } });
+    assert.equal(second.statusCode, 200);
+    const third = await postJob(app, token, { payload: { user: '第三条' } });
+    assert.equal(third.statusCode, 429);
+    assert.equal(third.json().error.code, 'rate_limited');
+    assert.equal(third.json().error.scope, 'minute');
+    assert.ok(Number(third.headers['retry-after']) >= 1);
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM ai_jobs').get().n, 2, '被拒请求未建任务');
+  } finally {
+    await app.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('transport 上游请求形状：messages 组装 + temperature + usage 块解析 + SSE 增量', async () => {
   let capturedBody = null;
+  const usageSeen = [];
   const upstream = new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'));
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}\n\n'));
       controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
       controller.close();
     },
@@ -551,10 +591,11 @@ test('transport 上游请求形状：messages 组装 + temperature + SSE 增量�
     system: 'sys prompt',
     user: 'user text',
     temperature: 0.7,
-  })) {
+  }, { onUsage: (u) => usageSeen.push(u) })) {
     deltas.push(delta);
   }
   assert.deepEqual(deltas, ['你好']);
+  assert.deepEqual(usageSeen, [{ prompt_tokens: 11, completion_tokens: 7 }], 'usage 块回调（COM-005）');
   assert.deepEqual(capturedBody.messages, [
     { role: 'system', content: 'sys prompt' },
     { role: 'user', content: 'user text' },
@@ -562,6 +603,7 @@ test('transport 上游请求形状：messages 组装 + temperature + SSE 增量�
   assert.equal(capturedBody.temperature, 0.7);
   assert.equal(capturedBody.model, 'deepseek-v4-flash');
   assert.equal(capturedBody.stream, true);
+  assert.deepEqual(capturedBody.stream_options, { include_usage: true });
 });
 
 test('buildUpstreamRequest：缺 user 抛 invalid_payload；temperature 缺省不透传', () => {
