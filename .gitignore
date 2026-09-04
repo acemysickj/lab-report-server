@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# runtime data (SQLite + WAL sidecar files)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# env / secrets (never commit)
+.env
+.env.*
+
+# os junk
+.DS_Store
+Thumbs.db
