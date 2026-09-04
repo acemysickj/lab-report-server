@@ -11,12 +11,20 @@ import { findSessionById } from './repositories/session.repository.js';
 import authRoutes from './routes/auth.js';
 import legalRoutes from './routes/legal.js';
 import walletRoutes from './routes/wallet.js';
+import aiRoutes from './routes/ai.js';
+import { createHttpTransport } from './ai/transport.js';
+import { createContentCache } from './ai/content-cache.js';
 
 /** Build the Fastify app. Options: { dataDir?, db?, logger? }. Pass db to reuse a connection (tests). */
 export async function buildApp(options = {}) {
   const db = options.db ?? openDatabase({ dataDir: options.dataDir });
   const app = Fastify({
     logger: options.logger ?? false,
+    // 契约「Fastify logger redact body」：显式配置，即使开日志也绝不输出请求正文/鉴权头（P-005）
+    redact: { paths: ['req.body', 'req.headers.authorization'], censor: '[REDACTED]' },
+    // 传值不可信以最强形式落实：additionalProperties:false 必须 400 拒绝，
+    // 而非 Fastify 默认 AJV removeAdditional 的静默剥离
+    ajv: { customOptions: { removeAdditional: false } },
     // 契约：X-Request-Id 所有请求必备——客户端带则沿用，缺失由服务端生成
     genReqId: (req) => {
       const provided = req.headers['x-request-id'];
@@ -26,6 +34,9 @@ export async function buildApp(options = {}) {
     },
   });
   app.decorate('db', db);
+  app.decorate('aiTransport', options.aiTransport ?? createHttpTransport());
+  // COM-004 裁决③：已完成任务全文取回的进程内缓存（非持久化，P-006 边界）
+  app.decorate('aiContentCache', options.aiContentCache ?? createContentCache());
   app.decorateRequest('user', null);
   app.decorateRequest('session', null);
 
@@ -76,6 +87,7 @@ export async function buildApp(options = {}) {
 
   await app.register(authRoutes, { prefix: '/api/v1' });
   await app.register(walletRoutes, { prefix: '/api/v1' });
+  await app.register(aiRoutes, { prefix: '/api/v1' });
   await app.register(legalRoutes);
 
   app.addHook('onClose', async () => {
