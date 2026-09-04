@@ -179,6 +179,27 @@ test('refresh rotation works; reuse of an old refresh revokes the whole family',
   }
 });
 
+test('refresh: non-active account cannot rotate tokens (account_unavailable)', async () => {
+  const { app, tmp } = await makeApp();
+  try {
+    await register(app);
+    const body = (await login(app)).json();
+    const userId = Number(decodeJwt(body.accessToken).sub);
+    app.db.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(userId);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      payload: { refreshToken: body.refreshToken },
+    });
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.json().error.code, 'account_unavailable');
+  } finally {
+    await app.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('logout revokes the family: refresh and access both die', async () => {
   const { app, tmp } = await makeApp();
   try {
@@ -221,6 +242,9 @@ test('delete account (P-007): sessions/user data removed, accounting kept, login
     app.db
       .prepare("INSERT INTO idempotency_keys (user_id, operation, idem_key, request_hash, expires_at) VALUES (?, 'generate', 'k1', 'h1', '2099-01-01T00:00:00.000Z')")
       .run(Number(userId));
+    app.db
+      .prepare("INSERT INTO ai_jobs (job_id, user_id, operation, model, status, credits_charged) VALUES ('job-smoke-1', ?, 'generate_section', 'deepseek-v4-flash', 'completed', 1)")
+      .run(Number(userId));
 
     // 密码错误 → 401，不删
     const wrong = await app.inject({
@@ -248,6 +272,7 @@ test('delete account (P-007): sessions/user data removed, accounting kept, login
 
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id = ?').get(Number(userId)).n, 0, 'sessions deleted');
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM idempotency_keys WHERE user_id = ?').get(Number(userId)).n, 0, 'user-scoped data deleted');
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM ai_jobs WHERE user_id = ?').get(Number(userId)).n, 0, 'AI job metadata deleted (account-deletion.md §3.2)');
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM credit_ledger WHERE user_id = ?').get(Number(userId)).n, 1, 'ledger kept');
     assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM orders WHERE user_id = ?').get(Number(userId)).n, 1, 'orders kept');
 

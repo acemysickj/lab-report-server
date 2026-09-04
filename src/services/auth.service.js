@@ -19,6 +19,7 @@ import {
 import {
   createUserWithAccount,
   findUserByEmail,
+  findUserById,
   anonymizeUser,
 } from '../repositories/user.repository.js';
 import {
@@ -110,6 +111,11 @@ export async function refresh(db, { refreshToken }) {
   if (session.expires_at <= nowIso()) {
     throw httpError(401, 'refresh_expired', '刷新令牌已过期，请重新登录');
   }
+  // 纵深防御：与 login 的 status 检查对齐——注销/禁用账号的会话不得再轮换
+  const user = findUserById(db, session.user_id);
+  if (!user || user.status !== 'active') {
+    throw httpError(401, 'account_unavailable', '账号不可用');
+  }
 
   const next = generateRefreshToken();
   const rotate = db.transaction(() => {
@@ -148,9 +154,13 @@ export async function deleteAccount(db, { user, password }) {
   const tx = db.transaction((userId) => {
     deleteSessionsForUser(db, userId);                       // 删会话
     db.prepare('DELETE FROM idempotency_keys WHERE user_id = ?').run(userId); // 删用户数据
+    db.prepare('DELETE FROM ai_jobs WHERE user_id = ?').run(userId);          // 删 AI 任务元数据（account-deletion.md §3.2）
     anonymizeUser(db, userId, `deleted+${randomUUID()}@deleted.invalid`);     // 脱敏资料（consent 留痕）
-    // 保留（账务/审计，P-007「保留交易必要账务记录」）：
-    //   accounts / credit_ledger / credit_reservations / orders / ai_jobs
+    // 保留（依法账务留存，P-007「保留交易必要账务记录」，account-deletion.md §3.2）：
+    //   accounts / credit_ledger / credit_reservations / orders
+    // COM-003 注销收尾（届时并入本事务原子执行）：
+    //   accounts 余额清零 + credit_ledger 记 adjust 流水（推荐方案，账务可审计）；
+    //   credit_reservations 释放/核销后清理。
   });
   tx(user.id);
 }
