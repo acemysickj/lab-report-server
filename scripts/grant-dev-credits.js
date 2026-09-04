@@ -2,7 +2,7 @@
 // 用法：DATA_DIR=./data-dev node scripts/grant-dev-credits.js <email> [tier]
 //   tier ∈ tier_9_9(100) | tier_29_9(350) | tier_49_9(700)，缺省 tier_9_9
 // 生产发放走支付回调/COM-005 Admin，本脚本不存在 HTTP 入口。
-import { openDatabase } from '../src/db.js';
+import { openDatabase, resolveDataDir } from '../src/db.js';
 import { createOrder } from '../src/repositories/wallet.repository.js';
 import { findUserByEmail } from '../src/repositories/user.repository.js';
 import { grantCredits } from '../src/services/wallet.service.js';
@@ -15,6 +15,8 @@ if (!email || !tier) {
   console.error('用法: node scripts/grant-dev-credits.js <email> [tier_9_9|tier_29_9|tier_49_9]');
   process.exit(1);
 }
+const dataDir = resolveDataDir();
+console.log(`数据目录: ${dataDir}（须与运行中服务端一致，否则会查错库）`);
 const db = openDatabase();
 const user = findUserByEmail(db, email);
 if (!user) {
