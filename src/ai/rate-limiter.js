@@ -2,6 +2,8 @@
 // 契约「风控」：并发 2 / 每分钟 10 / 每小时 50，后台可调（env: RATE_MAX_CONCURRENT /
 // RATE_PER_MINUTE / RATE_PER_HOUR，重启生效；数值经 config.js 注入，不绑机器码）。
 // 纯内存实现：单进程 PM2 fork 部署下即全局口径；重启清零（断电型宽容，不做持久化）。
+// 窗口语义：锚定首请求的固定窗口（非滑动窗口）——边界处理论上可突发近 2 倍配额；
+// 风控粗口径下可接受，如需精确滑动窗口属新提案。
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 const PRUNE_THRESHOLD = 5000; // Map 超过该用户数时清理 1 小时无活动的条目（2C2G 内存有界）

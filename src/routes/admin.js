@@ -3,17 +3,17 @@
 // 已配置 → Bearer 令牌比对（timingSafeEqual 防时序侧信道）。
 // 只读聚合 + 额度发放（生产发放路径，走 wallet 既有事务与台账审计）；不做任何改价/删户入口。
 import { randomUUID } from 'node:crypto';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { httpError } from '../lib/http-error.js';
 import * as adminRepo from '../repositories/admin.repository.js';
 import { createOrder } from '../repositories/wallet.repository.js';
-import { grantCredits } from '../services/wallet.service.js';
+import { grantCredits, runIdempotent } from '../services/wallet.service.js';
 import { findTier } from '../wallet/pricing.js';
 
 function safeEqual(a, b) {
-  const ab = Buffer.from(String(a));
-  const bb = Buffer.from(String(b));
-  if (ab.length !== bb.length) return false; // 长度不同直接否（timingSafeEqual 要求等长）
+  // 双侧先哈希再比对：等长化后用 timingSafeEqual，长度差异也不泄露（抗时序 + 抗长度探测）
+  const ab = createHash('sha256').update(String(a)).digest();
+  const bb = createHash('sha256').update(String(b)).digest();
   return timingSafeEqual(ab, bb);
 }
 
@@ -71,29 +71,52 @@ export default async function adminRoutes(app, { adminToken }) {
             email: { type: 'string', minLength: 3, maxLength: 254 },
             tier: { type: 'string', minLength: 3, maxLength: 32 },
             note: { type: 'string', maxLength: 128 },
+            idempotencyKey: { type: 'string', minLength: 8, maxLength: 128 }, // 可选：防重复发放
           },
         },
       },
     },
     async (request) => {
-      const { email, tier, note } = request.body;
+      const { email, tier, note, idempotencyKey } = request.body;
       const user = adminRepo.findUserByEmail(app.db, String(email).trim().toLowerCase());
       if (!user) throw httpError(404, 'user_not_found', '用户不存在');
       const tierInfo = findTier(tier);
       if (!tierInfo) throw httpError(400, 'unknown_tier', `未知档位：${tier}`);
-      // 复用钱包履约事务（原子：ledger + balance + order delivered），note 带 admin 标记便于审计
-      const orderId = createOrder(app.db, {
+      const doGrant = () => {
+        // 复用钱包履约事务（原子：ledger + balance + order delivered），note 带 admin 标记便于审计
+        const orderId = createOrder(app.db, {
+          userId: user.id,
+          tier: tierInfo.tier,
+          priceCents: tierInfo.priceCents,
+          credits: tierInfo.credits,
+        });
+        const out = grantCredits(app.db, {
+          userId: user.id,
+          orderId,
+          note: `admin grant ${tierInfo.tier}${note ? ': ' + note : ''}`,
+        });
+        return {
+          resultRef: `order:${orderId}`,
+          userId: user.id,
+          email: user.email,
+          credits: tierInfo.credits,
+          balance: out.balance,
+        };
+      };
+      if (!idempotencyKey) return doGrant();
+      // 幂等发放：同 (目标用户, admin_grant:<tier>, key) 只执行一次；重复请求回执 replayed + 当前余额
+      const result = runIdempotent(app.db, {
         userId: user.id,
-        tier: tierInfo.tier,
-        priceCents: tierInfo.priceCents,
-        credits: tierInfo.credits,
+        operation: `admin_grant:${tierInfo.tier}`,
+        idemKey: idempotencyKey,
+        requestHash: createHash('sha256').update(JSON.stringify([email, tier, note])).digest('hex'),
+        fn: doGrant,
       });
-      const out = grantCredits(app.db, {
-        userId: user.id,
-        orderId,
-        note: `admin grant ${tierInfo.tier}${note ? ': ' + note : ''}`,
-      });
-      return { userId: user.id, email: user.email, credits: tierInfo.credits, balance: out.balance };
+      if (result.replayed) {
+        const fresh = adminRepo.findUserByEmail(app.db, user.email);
+        return { userId: user.id, email: user.email, credits: tierInfo.credits, balance: fresh?.balance ?? null, replayed: true };
+      }
+      return result.outcome;
     }
   );
 

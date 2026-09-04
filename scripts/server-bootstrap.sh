@@ -9,7 +9,7 @@
 #   该文件只存服务器，绝不入库（.gitignore 已含 .env*）。
 set -euo pipefail
 
-TAG="${TAG:-v0.10.1}"
+TAG="${TAG:-v0.10.2}"
 ROOT="/srv/lab-report-server"
 ENV_FILE="$ROOT/.env.production"
 
@@ -51,6 +51,7 @@ echo "==> 5/6 迁移完成（_migrations 台账幂等）"
 # ---- 6. PM2 启动/重载 + 健康检查 ----
 if pm2 describe lab-report-server > /dev/null 2>&1; then
   pm2 reload ecosystem.config.cjs --update-env
+  pm2 save   # 固化当前 env——否则宕机 resurrect 会回退旧环境变量（如 ADMIN_TOKEN 悄然丢失）
 else
   pm2 start ecosystem.config.cjs
   pm2 save

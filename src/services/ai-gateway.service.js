@@ -91,6 +91,21 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
   const startedAt = Date.now();
   const usageAcc = { promptTokens: 0, completionTokens: 0 }; // COM-005：跨主备尝试累计（失败尝试的 token 同样产生成本）
   let lastModel = null;
+  let metered = false; // 防双计：成功路径与外层 catch 各只有一个入口真正落账
+  const recordUsage = (model, credits) => {
+    if (!usageMeter || metered) return;
+    metered = true;
+    usageMeter.record({
+      jobId,
+      userId: job.userId ?? job.user_id,
+      operation: job.operation,
+      model,
+      promptTokens: usageAcc.promptTokens,
+      completionTokens: usageAcc.completionTokens,
+      durationMs: Date.now() - startedAt,
+      credits,
+    });
+  };
   try {
     if (transport && transport.available === false) {
       throw httpError(503, 'ai_not_configured', 'AI 服务未配置（DEEPSEEK_API_KEY 缺失）');
@@ -123,18 +138,7 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
         // 裁决③：全文只进进程内存缓存（有界 TTL），供断线后 GET /jobs/:id/content 取回
         if (contentCache) contentCache.put(jobId, text);
         // COM-005 成本计量：仅元数据进内存环（token/时长/扣费），正文绝不入计量（P-005/P-006）
-        if (usageMeter) {
-          usageMeter.record({
-            jobId,
-            userId: job.userId ?? job.user_id,
-            operation: job.operation,
-            model,
-            promptTokens: usageAcc.promptTokens,
-            completionTokens: usageAcc.completionTokens,
-            durationMs: Date.now() - startedAt,
-            credits: settle.amount,
-          });
-        }
+        recordUsage(model, settle.amount);
         onEvent('done', { jobId, model, credits: settle.amount, textLength: text.length });
         return { status: 'completed', model, credits: settle.amount, textLength: text.length };
       } catch (err) {
@@ -153,18 +157,7 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
     throw classifyUpstreamError(lastError);
   } catch (err) {
     // COM-005：失败任务同样计入成本观测（credits 记已结算额——若 settled 后补偿，用户侧已退）
-    if (usageMeter) {
-      usageMeter.record({
-        jobId,
-        userId: job.userId ?? job.user_id,
-        operation: job.operation,
-        model: lastModel,
-        promptTokens: usageAcc.promptTokens,
-        completionTokens: usageAcc.completionTokens,
-        durationMs: Date.now() - startedAt,
-        credits: settledAmount ?? 0,
-      });
-    }
+    recordUsage(lastModel, settledAmount ?? 0);
     // L3 补偿：先补偿再抛错/上报（refundAmount 用内存中的结算金额，不依赖回库读值）
     compensate(db, { jobId, reservationId, settled, refundAmount: settledAmount, errorCode: err.code ?? 'ai_failed' });
     onEvent('error', { code: err.code ?? 'ai_failed', jobId }); // 只含错误码+jobId（P-005）

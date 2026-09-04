@@ -126,6 +126,23 @@ test('grant：按邮箱+档位发放，流水可审计；未知邮箱 404；未�
   } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
+test('grant 幂等：同 idempotencyKey 重复 POST 只发放一次并回执 replayed', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    await makeUser(app, 'i@test.dev', 0);
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+    const payload = { email: 'i@test.dev', tier: 'tier_9_9', idempotencyKey: 'grant-idem-0001' };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/admin/grant', headers, payload });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.json().balance, 100);
+    const second = await app.inject({ method: 'POST', url: '/api/v1/admin/grant', headers, payload });
+    assert.equal(second.statusCode, 200);
+    assert.equal(second.json().replayed, true, '回执 replayed');
+    assert.equal(second.json().balance, 100, '未重复发放');
+    assert.equal(app.db.prepare('SELECT COUNT(*) AS n FROM orders').get().n, 1, '订单只有一单');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
 test('usage：计量快照端点（含限流快照）', async () => {
   const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
   try {

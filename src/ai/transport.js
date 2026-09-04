@@ -1,8 +1,9 @@
 // src/ai/transport.js — DeepSeek 上游传输层（COM-004）
 // 契约：DeepSeek API Key 只存服务器环境（专用 key）；AI 请求正文不落任何持久化（P-005/P-006）。
 // fetch 可注入（测试用假 transport 覆盖 fallback/失败路径，不打真实上游）。
+import { AI_UPSTREAM_TIMEOUT_MS } from '../config.js';
+
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
-const UPSTREAM_TIMEOUT_MS = Number.parseInt(process.env.AI_UPSTREAM_TIMEOUT_MS || '60000', 10);
 
 /**
  * 建立传输器。options: { baseUrl?, apiKey?, fetchImpl? }。
@@ -40,7 +41,7 @@ export function createHttpTransport(options = {}) {
           stream_options: { include_usage: true },
           ...(temperature !== undefined ? { temperature } : {}),
         }),
-        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+        signal: AbortSignal.timeout(AI_UPSTREAM_TIMEOUT_MS),
       });
       if (!response.ok || !response.body) {
         const err = new Error(`upstream http ${response.status}`);
@@ -97,13 +98,13 @@ async function* parseUpstreamSse(body, onUsage) {
       }
       try {
         const parsed = JSON.parse(data);
-        // usage 块（stream_options.include_usage）：choices 为空、usage 在根上——只回调，不当正文
-        if (parsed && parsed.usage && typeof onUsage === 'function') {
-          onUsage(parsed.usage);
-          continue;
-        }
         const delta = parsed?.choices?.[0]?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) yield delta;
+        // usage 块（stream_options.include_usage）：可能在独立空 choices chunk，也可能伴随最后
+        // 一个正文 chunk——先取正文再回调 usage，绝不因 usage 丢弃正文（出路 A）
+        if (parsed && parsed.usage && typeof onUsage === 'function') {
+          onUsage(parsed.usage);
+        }
       } catch {
         // 跳过无法解析的心跳/注释行——不记录任何行内容（P-005）
       }

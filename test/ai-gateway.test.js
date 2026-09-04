@@ -606,6 +606,29 @@ test('transport 上游请求形状：messages 组装 + temperature + usage 块�
   assert.deepEqual(capturedBody.stream_options, { include_usage: true });
 });
 
+test('transport：usage 与 delta 同块共存时不丢正文（出路 A 边界）', async () => {
+  const usageSeen = [];
+  const upstream = new ReadableStream({
+    start(controller) {
+      // 尾块同时携带正文增量与 usage（某些上游实现如此）——两者都必须被处理
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"尾段"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\n'));
+      controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+  const transport = createHttpTransport({
+    baseUrl: 'https://upstream.test',
+    apiKey: 'sk-test',
+    fetchImpl: async () => new Response(upstream, { status: 200 }),
+  });
+  const deltas = [];
+  for await (const delta of transport.stream('deepseek-v4-flash', { user: 'x' }, { onUsage: (u) => usageSeen.push(u) })) {
+    deltas.push(delta);
+  }
+  assert.deepEqual(deltas, ['尾段'], '正文不被 usage 丢弃');
+  assert.deepEqual(usageSeen, [{ prompt_tokens: 3, completion_tokens: 2 }]);
+});
+
 test('buildUpstreamRequest：缺 user 抛 invalid_payload；temperature 缺省不透传', () => {
   assert.throws(() => buildUpstreamRequest({ system: 's' }), (err) => err.code === 'invalid_payload');
   assert.throws(() => buildUpstreamRequest({ user: '   ' }), (err) => err.code === 'invalid_payload');
