@@ -16,6 +16,33 @@ export function createHttpTransport(options = {}) {
   return {
     available: typeof apiKey === 'string' && apiKey.length > 0 && typeof fetchImpl === 'function',
     /**
+     * 可用性探测（OPS-002 /status 用）：最小补全调用（max_tokens=1, stream:false），8s 超时。
+     * 2xx → 正常；其余（网络/4xx/5xx）抛错 → 调用方标 degraded。不落任何数据。
+     */
+    async probe() {
+      if (!this.available) {
+        const err = new Error('AI upstream not configured');
+        err.code = 'ai_not_configured';
+        throw err;
+      }
+      const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: 'deepseek-v4-flash',
+          messages: [{ role: 'user', content: 'ping' }],
+          max_tokens: 1,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok) {
+        const err = new Error(`upstream http ${response.status}`);
+        err.code = `http_${response.status}`;
+        throw err;
+      }
+    },
+    /**
      * 对指定 model 发起流式补全，产出文本增量（async iterable of string）。
      * 失败（网络/非 2xx/流中断）抛 Error（statusCode 分类用 err.code：network / http_<status>）。
      * 正文只在此层内存流转，绝不写日志/库/dump。

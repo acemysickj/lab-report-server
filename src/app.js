@@ -14,6 +14,7 @@ import legalRoutes from './routes/legal.js';
 import walletRoutes from './routes/wallet.js';
 import aiRoutes from './routes/ai.js';
 import adminRoutes from './routes/admin.js';
+import statusRoutes from './routes/status.js';
 import { createHttpTransport } from './ai/transport.js';
 import { createContentCache } from './ai/content-cache.js';
 import { createRateLimiter } from './ai/rate-limiter.js';
@@ -104,6 +105,7 @@ export async function buildApp(options = {}) {
   await app.register(walletRoutes, { prefix: '/api/v1' });
   await app.register(aiRoutes, { prefix: '/api/v1' });
   await app.register(adminRoutes, { prefix: '/api/v1', adminToken });
+  await app.register(statusRoutes, { prefix: '/api/v1' });
   await app.register(legalRoutes);
 
   app.addHook('onClose', async () => {
