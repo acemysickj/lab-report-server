@@ -8,7 +8,7 @@ import { verifyAccessToken } from './lib/tokens.js';
 import { httpError } from './lib/http-error.js';
 import { findUserById } from './repositories/user.repository.js';
 import { findSessionById } from './repositories/session.repository.js';
-import { RATE_LIMITS, ADMIN_TOKEN } from './config.js';
+import { RATE_LIMITS, AUTH_RATE_LIMITS, ADMIN_TOKEN } from './config.js';
 import authRoutes from './routes/auth.js';
 import legalRoutes from './routes/legal.js';
 import walletRoutes from './routes/wallet.js';
@@ -24,6 +24,9 @@ export async function buildApp(options = {}) {
   const db = options.db ?? openDatabase({ dataDir: options.dataDir });
   const app = Fastify({
     logger: options.logger ?? false,
+    // 生产位于 Nginx 之后（Nginx 覆写 X-Forwarded-For 为 $remote_addr）：开启信任代理，
+    // 认证限流才能按真实客户端 IP 分桶（默认 true；本地直连开发场景 IP 恒 127.0.0.1）
+    trustProxy: options.trustProxy ?? true,
     // 契约「Fastify logger redact body」：显式配置，即使开日志也绝不输出请求正文/鉴权头（P-005）
     redact: { paths: ['req.body', 'req.headers.authorization'], censor: '[REDACTED]' },
     // 传值不可信以最强形式落实：additionalProperties:false 必须 400 拒绝，
@@ -43,6 +46,8 @@ export async function buildApp(options = {}) {
   app.decorate('aiContentCache', options.aiContentCache ?? createContentCache());
   // COM-005：限流（契约风控 2/10/50，env 可调）+ 成本计量（进程内环形，观测用）+ Admin 令牌
   app.decorate('aiRateLimiter', options.aiRateLimiter ?? createRateLimiter(options.rateLimits ?? RATE_LIMITS));
+  // COM-005 扩展：认证端点防爆破（按 IP 窗口限流）
+  app.decorate('authRateLimiter', options.authRateLimiter ?? createRateLimiter(options.authRateLimits ?? AUTH_RATE_LIMITS));
   app.decorate('aiUsageMeter', options.aiUsageMeter ?? createUsageMeter());
   // 注意：显式传 null = 关闭 Admin（?? 会放过 null，需区分 undefined）
   const adminToken = options.adminToken !== undefined ? options.adminToken : ADMIN_TOKEN;

@@ -44,6 +44,15 @@ export const RATE_LIMITS = {
   perHour: positiveIntEnv('RATE_PER_HOUR', 50),
 };
 
+// ---- COM-005 扩展：认证端点防爆破（按 IP，login/register/refresh 共享预算）----
+// 只统计尝试本身、不区分邮箱存在性 → 与 login 的防枚举口径（401 无差别）兼容。
+// IP 来自 X-Forwarded-For（生产由 Nginx 覆写为 $remote_addr；app 只听 127.0.0.1，链路可信）。
+export const AUTH_RATE_LIMITS = {
+  maxConcurrent: 9999, // 无并发约束——认证是短请求，只按窗口限
+  perMinute: positiveIntEnv('AUTH_RATE_PER_MINUTE', 5),
+  perHour: positiveIntEnv('AUTH_RATE_PER_HOUR', 30),
+};
+
 // ---- COM-005：极简 Admin（未配置即整体隐藏；只存服务器环境，不入 git） ----
 export const ADMIN_TOKEN = process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN.length >= 16
   ? process.env.ADMIN_TOKEN

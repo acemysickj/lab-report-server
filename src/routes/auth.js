@@ -23,8 +23,31 @@ const passwordSchema = {
 const deviceIdSchema = { type: 'string', minLength: 1, maxLength: 128 };
 
 export default async function authRoutes(app) {
+  // ---- COM-005 扩展：认证端点防爆破（按 IP 窗口限流，login/register/refresh 共享预算）----
+  // 只统计尝试本身、不区分邮箱存在性——429 与 401 的暴露面一致，保住防枚举口径。
+  // acquire 后立即 release：认证是短请求，只按分钟/小时窗口限，不做并发占坑。
+  const authGate = (request, reply, done) => {
+    const acquire = app.authRateLimiter.tryAcquire(request.ip);
+    if (!acquire.ok) {
+      reply
+        .code(429)
+        .header('retry-after', String(acquire.retryAfterSeconds))
+        .send({
+          error: {
+            code: 'rate_limited',
+            message: `尝试过于频繁，请 ${acquire.retryAfterSeconds} 秒后重试`,
+            retryAfter: acquire.retryAfterSeconds,
+            requestId: request.id,
+          },
+        });
+      return;
+    }
+    app.authRateLimiter.release(request.ip);
+    done();
+  };
   // ---- POST /api/v1/auth/register（P-001/P-002：两层告知 + 勾选可追溯） ----
   app.post('/auth/register', {
+    preHandler: [authGate],
     schema: {
       body: {
         type: 'object',
@@ -68,6 +91,7 @@ export default async function authRoutes(app) {
 
   // ---- POST /api/v1/auth/login ----
   app.post('/auth/login', {
+    preHandler: [authGate],
     schema: {
       body: {
         type: 'object',
@@ -85,6 +109,7 @@ export default async function authRoutes(app) {
 
   // ---- POST /api/v1/auth/refresh（Rotation + 复用检测） ----
   app.post('/auth/refresh', {
+    preHandler: [authGate],
     schema: {
       body: {
         type: 'object',
