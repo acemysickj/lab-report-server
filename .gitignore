@@ -16,6 +16,9 @@ npm-debug.log*
 .env
 .env.*
 
+# 运营静态资源（收款码等个人物料，只放服务器不入 git）
+static/
+
 # os junk
 .DS_Store
 Thumbs.db

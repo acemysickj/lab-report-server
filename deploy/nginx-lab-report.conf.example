@@ -32,6 +32,12 @@ server {
         alias /srv/lab-report-server/updates/;   # 存放 latest.yml + blockmap + exe
         autoindex off;
     }
+
+    # 运营静态资源（收款码等，客户端经主进程拉取转 data URL）
+    location /static/ {
+        alias /srv/lab-report-server/static/;
+        autoindex off;
+    }
 }
 
 # 域名+ICP 备案就绪后的 443 版本（acme.sh 签发证书后启用）：
