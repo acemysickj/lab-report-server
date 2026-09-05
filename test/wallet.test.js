@@ -36,8 +36,8 @@ async function registerAndLogin(app, email = 'w@test.dev') {
       consent: {
         acceptedPrivacyPolicy: true,
         acceptedTermsOfService: true,
-        privacyPolicyVersion: 'v1.0-draft',
-        termsVersion: 'v1.0-draft',
+        privacyPolicyVersion: 'v1.0',
+        termsVersion: 'v1.0',
       },
     },
   });

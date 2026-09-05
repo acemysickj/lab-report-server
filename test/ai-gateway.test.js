@@ -73,8 +73,8 @@ async function registerLoginFund(app, email = 'ai@test.dev', credits = 100) {
       consent: {
         acceptedPrivacyPolicy: true,
         acceptedTermsOfService: true,
-        privacyPolicyVersion: 'v1.0-draft',
-        termsVersion: 'v1.0-draft',
+        privacyPolicyVersion: 'v1.0',
+        termsVersion: 'v1.0',
       },
     },
   });
@@ -422,8 +422,8 @@ test('status endpoint: view has no content; 401 unauth; 404 hides others', async
         consent: {
           acceptedPrivacyPolicy: true,
           acceptedTermsOfService: true,
-          privacyPolicyVersion: 'v1.0-draft',
-          termsVersion: 'v1.0-draft',
+          privacyPolicyVersion: 'v1.0',
+          termsVersion: 'v1.0',
         },
       },
     });

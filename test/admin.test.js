@@ -29,7 +29,7 @@ async function makeUser(app, email, credits = 0) {
     payload: {
       email,
       password: TEST_PASSWORD,
-      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: 'v1.0-draft', termsVersion: 'v1.0-draft' },
+      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: 'v1.0', termsVersion: 'v1.0' },
     },
   });
   const userId = res.statusCode === 201 ? res.json().userId : null;
