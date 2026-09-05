@@ -84,7 +84,7 @@ function createJobOnce(db, { userId, operation, payload, requestId }) {
  * 失败按 L3 补偿（未核销→release+failed；已核销→refund+refunded）。
  * onEvent(type, data) 只收元数据与文本增量（SSE 通道，不落盘）。
  */
-export async function executeJob(db, { job, payload, transport, onEvent, contentCache, usageMeter }) {
+export async function executeJob(db, { job, payload, transport, onEvent, onThinking, contentCache, usageMeter }) {
   const { jobId, reservationId } = job;
   let settled = false;
   let settledAmount = null;
@@ -123,6 +123,8 @@ export async function executeJob(db, { job, payload, transport, onEvent, content
             attemptUsage.promptTokens += Number(u?.prompt_tokens) || 0;
             attemptUsage.completionTokens += Number(u?.completion_tokens) || 0;
           },
+          // 思考模式（V4 默认关，env 可开）：上游思考增量 → 一次性信号上游层，不透传思考文本
+          onThinking: onThinking || undefined,
         })) {
           text += delta;
           emitted = true;

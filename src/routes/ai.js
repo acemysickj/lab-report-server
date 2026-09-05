@@ -118,12 +118,19 @@ export default async function aiRoutes(app) {
           return;
         }
 
+        let thinkingSent = false; // 思考信号只发一次（思考文本绝不透传，P-005 最小化口径）
         await gateway.executeJob(app.db, {
           job,
           payload,
           transport: app.aiTransport,
           contentCache: app.aiContentCache,
           usageMeter: app.aiUsageMeter,
+          onThinking: () => {
+            if (!thinkingSent) {
+              thinkingSent = true;
+              sseSend(raw, 'thinking', { jobId: job.jobId });
+            }
+          },
           onEvent: (event, data) => {
             if (event === 'part') sseContentChunk(raw, job.jobId, data.text);
             else sseSend(raw, event, data);

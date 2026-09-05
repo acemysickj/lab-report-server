@@ -1,7 +1,7 @@
 // src/ai/transport.js — DeepSeek 上游传输层（COM-004）
 // 契约：DeepSeek API Key 只存服务器环境（专用 key）；AI 请求正文不落任何持久化（P-005/P-006）。
 // fetch 可注入（测试用假 transport 覆盖 fallback/失败路径，不打真实上游）。
-import { AI_UPSTREAM_TIMEOUT_MS } from '../config.js';
+import { AI_UPSTREAM_TIMEOUT_MS, DEEPSEEK_THINKING_TYPE } from '../config.js';
 
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com';
 
@@ -20,7 +20,7 @@ export function createHttpTransport(options = {}) {
      * 失败（网络/非 2xx/流中断）抛 Error（statusCode 分类用 err.code：network / http_<status>）。
      * 正文只在此层内存流转，绝不写日志/库/dump。
      */
-    async *stream(model, payload, { onUsage } = {}) {
+    async *stream(model, payload, { onUsage, onThinking } = {}) {
       if (!this.available) {
         const err = new Error('AI upstream not configured');
         err.code = 'ai_not_configured';
@@ -37,6 +37,8 @@ export function createHttpTransport(options = {}) {
           model,
           stream: true,
           messages,
+          // V4 思考模式控制（默认 disabled：报告写作为直出任务，思考 token 计费且首字延迟分钟级）
+          thinking: { type: DEEPSEEK_THINKING_TYPE },
           // COM-005 成本计量：上游在终止前回传 usage 块（choices 为空的附加 chunk）
           stream_options: { include_usage: true },
           ...(temperature !== undefined ? { temperature } : {}),
@@ -48,7 +50,7 @@ export function createHttpTransport(options = {}) {
         err.code = `http_${response.status}`;
         throw err;
       }
-      for await (const delta of parseUpstreamSse(response.body, onUsage)) {
+      for await (const delta of parseUpstreamSse(response.body, { onUsage, onThinking })) {
         yield delta; // 仅内存/SSE 转发，不落盘
       }
     },
@@ -79,8 +81,8 @@ export function buildUpstreamRequest(payload) {
   return { messages, temperature };
 }
 
-/** 解析上游 OpenAI 兼容 SSE：data: {...choices[0].delta.content...} / usage 块 / data: [DONE]。 */
-async function* parseUpstreamSse(body, onUsage) {
+/** 解析上游 OpenAI 兼容 SSE：正文/思考增量 + usage 块 + data: [DONE]。 */
+async function* parseUpstreamSse(body, { onUsage, onThinking } = {}) {
   const decoder = new TextDecoder();
   let buffer = '';
   let done = false;
@@ -98,8 +100,13 @@ async function* parseUpstreamSse(body, onUsage) {
       }
       try {
         const parsed = JSON.parse(data);
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        if (typeof delta === 'string' && delta.length > 0) yield delta;
+        const delta = parsed?.choices?.[0]?.delta;
+        // 思考增量（reasoning_content）：只回调信号，不当正文（正文=delta.content，出路 A）
+        if (delta && typeof delta.reasoning_content === 'string' && delta.reasoning_content && typeof onThinking === 'function') {
+          onThinking(delta.reasoning_content);
+        }
+        const content = delta?.content;
+        if (typeof content === 'string' && content.length > 0) yield content;
         // usage 块（stream_options.include_usage）：可能在独立空 choices chunk，也可能伴随最后
         // 一个正文 chunk——先取正文再回调 usage，绝不因 usage 丢弃正文（出路 A）
         if (parsed && parsed.usage && typeof onUsage === 'function') {

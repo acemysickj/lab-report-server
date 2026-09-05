@@ -567,11 +567,40 @@ test('COM-005 限流：超过 perMinute 429（rate_limited + retry-after），hi
   }
 });
 
-test('transport 上游请求形状：messages 组装 + temperature + usage 块解析 + SSE 增量', async () => {
+test('thinking 信号：上游思考增量 → SSE 具名 event:thinking 仅一次；正文不受影响', async () => {
+  // 传输层把 reasoning_content 增量转成 onThinking 信号（模拟思考模式开启）
+  const transport = {
+    available: true,
+    async *stream(model, payload, { onThinking } = {}) {
+      if (typeof onThinking === 'function') onThinking('思考增量1');
+      if (typeof onThinking === 'function') onThinking('思考增量2');
+      yield '正文';
+    },
+  };
+  const { app, tmp } = await makeApp({ transport });
+  try {
+    const { token } = await registerLoginFund(app);
+    const res = await postJob(app, token);
+    const events = parseSse(res.body);
+    const thinkingEvents = events.filter((e) => e.event === 'thinking');
+    assert.equal(thinkingEvents.length, 1, 'thinking 事件只发一次');
+    assert.ok(thinkingEvents[0].data.jobId, 'thinking 携带 jobId');
+    assert.equal(events.find((e) => e.event === 'done').event, 'done', '任务正常完成');
+    assert.deepEqual(clientParse(res.body), '正文', '正文不受思考信号影响');
+  } finally {
+    await app.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('transport 上游请求形状：messages 组装 + temperature + thinking 默认关 + usage 块解析 + SSE 增量', async () => {
   let capturedBody = null;
   const usageSeen = [];
+  const thinkingSeen = [];
   const upstream = new ReadableStream({
     start(controller) {
+      // 先思考增量（reasoning_content）再正文增量——思考文本不得混入正文
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"reasoning_content":"让我想想"}}]}\n\n'));
       controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n'));
       controller.enqueue(new TextEncoder().encode('data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}\n\n'));
       controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
@@ -591,10 +620,11 @@ test('transport 上游请求形状：messages 组装 + temperature + usage 块�
     system: 'sys prompt',
     user: 'user text',
     temperature: 0.7,
-  }, { onUsage: (u) => usageSeen.push(u) })) {
+  }, { onUsage: (u) => usageSeen.push(u), onThinking: (t) => thinkingSeen.push(t) })) {
     deltas.push(delta);
   }
-  assert.deepEqual(deltas, ['你好']);
+  assert.deepEqual(deltas, ['你好'], '思考增量不进正文');
+  assert.deepEqual(thinkingSeen, ['让我想想'], '思考增量走 onThinking 回调');
   assert.deepEqual(usageSeen, [{ prompt_tokens: 11, completion_tokens: 7 }], 'usage 块回调（COM-005）');
   assert.deepEqual(capturedBody.messages, [
     { role: 'system', content: 'sys prompt' },
@@ -603,6 +633,7 @@ test('transport 上游请求形状：messages 组装 + temperature + usage 块�
   assert.equal(capturedBody.temperature, 0.7);
   assert.equal(capturedBody.model, 'deepseek-v4-flash');
   assert.equal(capturedBody.stream, true);
+  assert.deepEqual(capturedBody.thinking, { type: 'disabled' }, 'V4 思考模式默认关闭');
   assert.deepEqual(capturedBody.stream_options, { include_usage: true });
 });
 

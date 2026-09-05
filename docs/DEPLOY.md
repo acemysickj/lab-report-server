@@ -23,6 +23,8 @@ git fetch --depth 1 origin tag <TAG> && git checkout <TAG>   # 首次直接拉 t
 | `DEEPSEEK_API_KEY` | DeepSeek 平台专用 key（非日常开发 key，只存服务器） |
 | `ADMIN_TOKEN` | ≥16 字符随机串；**未配置=Admin 端点整体 404 隐藏**（发放额度走此令牌） |
 | `RATE_MAX_CONCURRENT` / `RATE_PER_MINUTE` / `RATE_PER_HOUR` | 契约风控默认 2/10/50，后台可调（改 env 重启生效） |
+| `DEEPSEEK_THINKING_TYPE` | V4 思考模式：默认 `disabled`（报告写作直出，快且省）；`enabled` 开启深度推理（首字延迟分钟级，思考 token 计费，客户端会显示「AI 正在思考」） |
+| `AI_UPSTREAM_TIMEOUT_MS` | 上游超时，默认 300000（5 分钟；思考模式长任务务必放宽） |
 | `DATA_DIR` | `/srv/lab-report-server/data`（默认 `./data` 亦可，二者取一固定） |
 | `PORT` / `HOST` | `3000` / `127.0.0.1`（ecosystem.config.cjs 已固化；Fastify 绝不直接暴露公网） |
 

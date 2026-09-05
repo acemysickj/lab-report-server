@@ -49,5 +49,9 @@ export const ADMIN_TOKEN = process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN.le
   ? process.env.ADMIN_TOKEN
   : null;
 
-// ---- COM-004：上游传输超时（毫秒） ----
-export const AI_UPSTREAM_TIMEOUT_MS = positiveIntEnv('AI_UPSTREAM_TIMEOUT_MS', 60000);
+// ---- COM-004：上游传输超时（毫秒）。长提示词+思考模式下出首字可达分钟级，默认放宽到 5 分钟 ----
+export const AI_UPSTREAM_TIMEOUT_MS = positiveIntEnv('AI_UPSTREAM_TIMEOUT_MS', 300000);
+
+// ---- COM-004：V4 思考模式（deepseek-v4-* 默认开启思考，思考 token 计费且首字延迟分钟级）。
+// 报告写作为直出任务，默认 disabled（快且省）；需要深度推理时设 DEEPSEEK_THINKING_TYPE=enabled ----
+export const DEEPSEEK_THINKING_TYPE = process.env.DEEPSEEK_THINKING_TYPE === 'enabled' ? 'enabled' : 'disabled';
