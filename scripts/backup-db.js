@@ -36,14 +36,15 @@ export async function backupDatabase({ dataDir, outDir, keep = 7, now = new Date
 
 /** 按 mtime 保留最新 keep 份（含本次），更旧的删除。返回删除数。 */
 function rotateOld(destDir, keep) {
+  // 文件名含 UTC 时间戳（字典序即时间序），按名排序避免 mtime 精度抖动
   const backups = fs
     .readdirSync(destDir)
     .filter((f) => f.startsWith(BACKUP_FILENAME_PREFIX) && f.endsWith('.db'))
-    .map((f) => ({ f, m: fs.statSync(path.join(destDir, f)).mtimeMs }))
-    .sort((a, b) => b.m - a.m);
+    .sort()
+    .reverse();
   let removed = 0;
   for (let i = keep; i < backups.length; i++) {
-    fs.unlinkSync(path.join(destDir, backups[i].f));
+    fs.unlinkSync(path.join(destDir, backups[i]));
     removed += 1;
   }
   return removed;
