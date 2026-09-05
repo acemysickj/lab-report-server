@@ -36,16 +36,20 @@ else
   bad "unattended-upgrades 未安装：sudo apt install unattended-upgrades"
 fi
 
-# 4. SSH 加固（root 直登 / 密码登录）
-if sudo sshd -T 2>/dev/null | grep -qi "permitrootlogin no"; then
+# 4. SSH 加固（报告实际生效值：no > prohibit-password（仅密钥，可接受）> yes（危险））
+PR=$(sudo sshd -T 2>/dev/null | grep -i "^permitrootlogin" | awk '{print $2}')
+if [ "$PR" = "no" ]; then
   ok "SSH root 直登已禁止"
+elif [ "$PR" = "prohibit-password" ]; then
+  warn "SSH root 仅限密钥登录（prohibit-password）——建议改 no"
 else
-  bad "SSH PermitRootLogin 未禁用"
+  bad "SSH PermitRootLogin=$PR（危险）"
 fi
-if sudo sshd -T 2>/dev/null | grep -qi "passwordauthentication no"; then
+PA=$(sudo sshd -T 2>/dev/null | grep -i "^passwordauthentication" | awk '{print $2}')
+if [ "$PA" = "no" ]; then
   ok "SSH 密码登录已关闭"
 else
-  bad "SSH 密码登录未关闭"
+  bad "SSH 密码登录开启（passwordauthentication $PA）——加固步骤见 docs/DEPLOY.md §8"
 fi
 
 # 5. UFW
@@ -76,7 +80,7 @@ else
 fi
 
 # 9. 备份
-BAK_DIR=${BACKUP_DIR:-/var/backups/lab-report-server}
+BAK_DIR=${BACKUP_DIR:-/var/lib/lab-report-server/backups}
 if [ -d "$BAK_DIR" ] && ls "$BAK_DIR"/lab-report-server-*.db >/dev/null 2>&1; then
   LATEST=$(ls -t "$BAK_DIR"/lab-report-server-*.db | head -1)
   AGE=$(( ($(date +%s) - $(stat -c '%Y' "$LATEST")) / 3600 ))

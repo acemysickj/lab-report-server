@@ -117,3 +117,35 @@ pm2 set pm2-logrotate:compress true
 - 首个账号的额度发放：`curl -X POST https://<域名>/api/v1/admin/grant -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"email":"...","tier":"tier_49_9"}'`（生产）；本地/测试亦可用 `scripts/grant-dev-credits.js`。
 - `AUTH_JWT_SECRET` 换新 = 全体登录态失效（客户端需重新登录），属预期行为。
 - 成本计量（/admin/usage）为进程内环形观测（重启清零），非计费权威——成本权威=DeepSeek 控制台账。
+
+
+## 8. SSH 加固（一次性；严格按顺序，防锁死）
+
+> 前提：保持当前 SSH 会话不要断开，另开一个终端做后续登录测试。
+
+```bash
+# 1) 写加固配置
+sudo tee /etc/ssh/sshd_config.d/99-lab-report-hardening.conf > /dev/null <<'CONF'
+PermitRootLogin no
+PasswordAuthentication no
+CONF
+
+# 2) 语法检查 + 重载（不重启，不断开现有连接）
+sudo sshd -t && sudo systemctl reload ssh
+
+# 3) 另开一个终端测试新登录（能登录才安全；失败则用旧会话回滚配置）
+#    ssh labreport@120.79.10.96
+```
+
+fail2ban 开启 sshd jail（当前未启用）：
+
+```bash
+sudo tee /etc/fail2ban/jail.d/sshd.local > /dev/null <<'CONF'
+[sshd]
+enabled = true
+maxretry = 5
+bantime = 1h
+CONF
+sudo systemctl restart fail2ban
+sudo fail2ban-client status sshd
+```

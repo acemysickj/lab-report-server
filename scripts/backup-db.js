@@ -17,7 +17,7 @@ export async function backupDatabase({ dataDir, outDir, keep = 7, now = new Date
   if (!fs.existsSync(srcPath)) {
     throw new Error(`源数据库不存在：${srcPath}`);
   }
-  const destDir = outDir ?? process.env.BACKUP_DIR ?? '/var/backups/lab-report-server';
+  const destDir = outDir ?? process.env.BACKUP_DIR ?? '/var/lib/lab-report-server/backups';  // labreport 可写，无需 sudo
   fs.mkdirSync(destDir, { recursive: true });
 
   const stamp = now.toISOString().replace(/[-:T]/g, '').slice(0, 14); // YYYYMMDDHHMMSS（UTC）
