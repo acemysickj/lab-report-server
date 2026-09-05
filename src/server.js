@@ -1,11 +1,18 @@
 // src/server.js — process entry (npm start / PM2)
 // 契约：Fastify 只监听 127.0.0.1，不暴露公网（Nginx 反向代理 + acme.sh HTTPS 在前）。
 import { buildApp } from './app.js';
+import { sweepOrphanedJobs } from './services/orphan-sweep.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 
 const app = await buildApp();
+
+// 启动清扫：单进程 fork 下，上一进程遗留的 running 任务必然是孤儿——标 failed 并释放预扣
+const swept = sweepOrphanedJobs(app.db);
+if (swept.jobs > 0) {
+  console.warn(`[startup] orphaned jobs swept: ${swept.jobs} failed, ${swept.released} reservations released`);
+}
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {

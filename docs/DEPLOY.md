@@ -85,7 +85,34 @@ server {
 - [ ] SSE 计费生成一单：流式输出 + 余额扣减 + 消费记录一条（无 key 时应 503 ai_not_configured，同样证明链路通）
 - [ ] `pm2 logs lab-report-server --lines 50` 无错误堆栈；日志中无任何请求正文（P-005）
 
-## 5. 已知边界
+## 6. 定时任务与备份（首次部署后一次性配置）
+
+**SQLite 每日热备**（在线 backup API，不锁库；保留 7 份自动轮转）：
+
+```bash
+sudo crontab -e -u labreport
+# 每日 04:20 备份：
+20 4 * * * cd /srv/lab-report-server && /home/labreport/.nvm/versions/node/*/bin/node scripts/backup-db.js >> /var/log/lab-report-server/backup.log 2>&1
+```
+
+**日志轮转**（PM2 自身输出）：
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+pm2 set pm2-logrotate:compress true
+```
+
+**每周运维自检**（NTP/fail2ban/备份时效/磁盘/版本同步）：
+
+```bash
+0 9 * * 1 bash /srv/lab-report-server/scripts/server-ops-check.sh >> /var/log/lab-report-server/ops-check.log 2>&1
+```
+
+**恢复流程**（演练过才算数）：停服 → 用备份文件替换 `DATA_DIR/app.db` → `npm run migrate`（幂等）→ 起服 → /health。
+
+## 7. 已知边界
 
 - 首个账号的额度发放：`curl -X POST https://<域名>/api/v1/admin/grant -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"email":"...","tier":"tier_49_9"}'`（生产）；本地/测试亦可用 `scripts/grant-dev-credits.js`。
 - `AUTH_JWT_SECRET` 换新 = 全体登录态失效（客户端需重新登录），属预期行为。
