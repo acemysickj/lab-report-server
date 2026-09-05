@@ -200,7 +200,17 @@ function classifyUpstreamError(err) {
   if (err.code === 'invalid_payload') {
     return httpError(400, 'invalid_payload', '业务负载无效');
   }
+  // 超时：AbortSignal.timeout 抛 TimeoutError，或 err.name/code 带 timeout（OPS：细分定位）
+  if (err.name === 'TimeoutError' || /timeout/i.test(err.code ?? '') || /超时|timeout/i.test(err.message ?? '')) {
+    return httpError(504, 'ai_timeout', 'AI 上游响应超时');
+  }
   const status = Number.parseInt(String(err.code ?? '').replace('http_', ''), 10);
+  if (Number.isInteger(status) && status === 429) {
+    return httpError(502, 'ai_upstream_rate_limited', 'AI 上游限流');
+  }
+  if (Number.isInteger(status) && status >= 500) {
+    return httpError(502, 'ai_upstream_5xx', 'AI 上游服务错误');
+  }
   if (Number.isInteger(status) && status === 401) {
     return httpError(502, 'ai_auth_error', 'AI 上游认证失败（服务端密钥问题）');
   }

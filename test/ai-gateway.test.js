@@ -593,6 +593,34 @@ test('thinking 信号：上游思考增量 → SSE 具名 event:thinking 仅一�
   }
 });
 
+test('OPS 错误细分：超时→ai_timeout(504)；上游 5xx→ai_upstream_5xx；429→ai_upstream_rate_limited', async () => {
+  const t504 = { available: true, async *stream() { const e = new Error('The operation was aborted due to timeout'); e.name = 'TimeoutError'; throw e; } };
+  const a = await makeApp({ transport: t504 });
+  try {
+    const { token } = await registerLoginFund(a.app);
+    const res = await postJob(a.app, token);
+    const job = a.app.db.prepare('SELECT error_code FROM ai_jobs').get();
+    assert.equal(job.error_code, 'ai_timeout', '超时细分');
+    assert.ok(res.body.includes('"ai_timeout"'), 'SSE error 事件码');
+  } finally { await a.app.close(); fs.rmSync(a.tmp, { recursive: true, force: true }); }
+
+  const t500 = { available: true, async *stream() { throw Object.assign(new Error('x'), { code: 'http_500' }); } };
+  const b = await makeApp({ transport: t500 });
+  try {
+    const { token } = await registerLoginFund(b.app);
+    await postJob(b.app, token);
+    assert.equal(b.app.db.prepare('SELECT error_code FROM ai_jobs').get().error_code, 'ai_upstream_5xx');
+  } finally { await b.app.close(); fs.rmSync(b.tmp, { recursive: true, force: true }); }
+
+  const t429 = { available: true, async *stream() { throw Object.assign(new Error('x'), { code: 'http_429' }); } };
+  const c = await makeApp({ transport: t429 });
+  try {
+    const { token } = await registerLoginFund(c.app);
+    await postJob(c.app, token);
+    assert.equal(c.app.db.prepare('SELECT error_code FROM ai_jobs').get().error_code, 'ai_upstream_rate_limited');
+  } finally { await c.app.close(); fs.rmSync(c.tmp, { recursive: true, force: true }); }
+});
+
 test('transport 上游请求形状：messages 组装 + temperature + thinking 默认关 + usage 块解析 + SSE 增量', async () => {
   let capturedBody = null;
   const usageSeen = [];
