@@ -220,13 +220,13 @@ test('all models fail: SSE error event; job failed via release (no charge)', asy
     const events = parseSse(res.body);
     const errEvent = events.find((e) => e.event === 'error');
     assert.ok(errEvent, 'error 事件存在');
-    assert.equal(errEvent.data.code, 'ai_upstream_error');
+    assert.equal(errEvent.data.code, 'ai_upstream_5xx');
     assert.ok(errEvent.data.jobId);
     assert.ok(!('message' in errEvent.data), 'error 事件只含 code+jobId');
 
     const job = app.db.prepare('SELECT * FROM ai_jobs').get();
     assert.equal(job.status, 'failed');
-    assert.equal(job.error_code, 'ai_upstream_error');
+    assert.equal(job.error_code, 'ai_upstream_5xx');
 
     const account = app.db.prepare('SELECT balance FROM accounts WHERE user_id = ?').get(userId);
     assert.equal(account.balance, 100, '失败未扣费（release 路径）');
@@ -479,7 +479,7 @@ test('body never persisted (P-005/P-006): logs / SQLite / error path — three a
 
     // 断言 3：错误路径脱敏——error_code/事件/状态接口只有错误码+jobId，不含正文
     const job = app.db.prepare('SELECT * FROM ai_jobs').get();
-    assert.equal(job.error_code, 'ai_upstream_error');
+    assert.equal(job.error_code, 'ai_upstream_5xx');
     const errEvent = events.find((e) => e.event === 'error');
     assert.ok(!JSON.stringify(errEvent).includes(SENTINEL));
     assert.ok(!res.body.includes(SENTINEL), 'SSE 输出不含正文回显');
@@ -714,7 +714,7 @@ test('半途失败不 fallback（宁失败不串文）：error 事件 + failed +
     const res = await postJob(app, token);
     const events = parseSse(res.body);
     assert.deepEqual(clientParse(res.body), '半截', '只发出失败前的半截，无 fallback 全文');
-    assert.equal(events.find((e) => e.event === 'error').data.code, 'ai_upstream_error');
+    assert.equal(events.find((e) => e.event === 'error').data.code, 'ai_upstream_5xx');
 
     const job = app.db.prepare('SELECT * FROM ai_jobs').get();
     assert.equal(job.status, 'failed');
