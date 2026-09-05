@@ -1,19 +1,29 @@
 # deploy/nginx-lab-report.conf.example — Nginx 反代示例（复制到 /etc/nginx/sites-available/ 后改域名/证书路径）
 # 契约要点：Fastify 只听 127.0.0.1；SSE 三件套（Connection'' / proxy_buffering off / read_timeout）缺一不可；
 # Nginx 不记录 request body（契约 P-005）——access_log 仅记基础行。
+# 流式性能：gzip_off（防 SSE 被压缩缓冲成大块）+ tcp_nodelay + upstream keepalive。
+
+# 与 127.0.0.1:3000 保持长连接池，避免每个 AI 任务重新握手
+upstream labreport_app {
+    server 127.0.0.1:3000;
+    keepalive 16;
+}
 
 server {
     listen 80;
     server_name _;                 # 备案前的 IP 联调口径；域名就绪后改为域名并切 443
+    tcp_nodelay on;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://labreport_app;
         proxy_http_version 1.1;
         proxy_set_header Connection '';
         proxy_set_header X-Request-Id $http_x_request_id;
-        proxy_buffering off;       # SSE 实时透传
+        proxy_buffering off;       # SSE 必需：关闭缓冲，正文块实时透传
+        gzip off;                  # SSE 必需：gzip 会把小帧攒成大块，流式变成一顿一顿
+        proxy_socket_keepalive on;
         proxy_read_timeout 300s;   # AI 长任务流
-        access_log off;
+        access_log off;            # 契约：Nginx 不记录 request body
     }
 
     # 客户端自动更新静态源（v0.10.0 起 app-update.yml 烧入 https://<域名>/updates/）

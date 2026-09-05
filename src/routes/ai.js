@@ -89,15 +89,17 @@ export default async function aiRoutes(app) {
           requestId: request.id,
         });
 
-        reply.hijack();
-        const raw = reply.raw;
-        raw.writeHead(200, {
-          'content-type': 'text/event-stream; charset=utf-8',
-          'cache-control': 'no-cache',
-          connection: 'keep-alive',
-          'x-request-id': request.id,
-          'x-job-id': job.jobId, // 裁决③：jobId 首字节前即可得（客户端断线续存用）
-        });
+      reply.hijack();
+      const raw = reply.raw;
+      raw.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'x-request-id': request.id,
+        'x-job-id': job.jobId, // 裁决③：jobId 首字节前即可得（客户端断线续存用）
+      });
+      // SSE 流式帧极小且密集——禁用 Nagle，避免与对端延迟 ACK 相互作用造成逐帧 40ms 级卡顿
+      if (raw.socket && typeof raw.socket.setNoDelay === 'function') raw.socket.setNoDelay(true);
 
         sseSend(raw, 'job', { jobId: job.jobId, replayed: Boolean(replayed) });
 
