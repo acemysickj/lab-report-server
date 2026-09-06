@@ -61,6 +61,26 @@ export const ADMIN_TOKEN = process.env.ADMIN_TOKEN && process.env.ADMIN_TOKEN.le
 // ---- COM-004：上游传输超时（毫秒）。长提示词+思考模式下出首字可达分钟级，默认放宽到 5 分钟 ----
 export const AI_UPSTREAM_TIMEOUT_MS = positiveIntEnv('AI_UPSTREAM_TIMEOUT_MS', 300000);
 
+// ---- BK-008（ADR-003）：BYOK 白名单（env 逗号分隔邮箱；测试/内测紧急自救通道） ----
+// 语义：名单内 = byokAllowed true；未配置/空名单 = 全员 false（ADR-003「默认全员不可用」）。
+// 邮箱归一化：trim + 小写比对。仅软控制（UI 显隐），硬门（403 byok_not_approved）留正式版。
+export function parseByokAllowlist(raw) {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const set = new Set();
+  for (const item of list) {
+    const email = String(item).trim().toLowerCase();
+    if (email) set.add(email);
+  }
+  return set;
+}
+
+export const BYOK_ALLOWLIST = parseByokAllowlist(process.env.BYOK_ALLOWLIST);
+
+export function byokAllowedFor(allowlist, email) {
+  if (!allowlist || typeof email !== 'string') return false;
+  return allowlist.has(email.trim().toLowerCase());
+}
+
 // ---- COM-004：V4 思考模式（deepseek-v4-* 默认开启思考，思考 token 计费且首字延迟分钟级）。
 // 报告写作为直出任务，默认 disabled（快且省）；需要深度推理时设 DEEPSEEK_THINKING_TYPE=enabled ----
 export const DEEPSEEK_THINKING_TYPE = process.env.DEEPSEEK_THINKING_TYPE === 'enabled' ? 'enabled' : 'disabled';

@@ -79,12 +79,16 @@ export default async function authRoutes(app) {
         201: {
           type: 'object',
           required: ['userId', 'email'],
-          properties: { userId: { type: 'integer' }, email: { type: 'string' } },
+          properties: {
+            userId: { type: 'integer' },
+            email: { type: 'string' },
+            byokAllowed: { type: 'boolean' }, // BK-008（ADR-003）
+          },
         },
       },
     },
     handler: async (request, reply) => {
-      const result = await authService.register(app.db, request.body);
+      const result = await authService.register(app.db, request.body, app.byokAllowlist);
       reply.code(201).send(result);
     },
   });
@@ -104,7 +108,7 @@ export default async function authRoutes(app) {
         },
       },
     },
-    handler: async (request) => authService.login(app.db, request.body),
+    handler: async (request) => authService.login(app.db, request.body, app.byokAllowlist),
   });
 
   // ---- POST /api/v1/auth/refresh（Rotation + 复用检测） ----
@@ -118,7 +122,7 @@ export default async function authRoutes(app) {
         properties: { refreshToken: { type: 'string', minLength: 16, maxLength: 128 } },
       },
     },
-    handler: async (request) => authService.refresh(app.db, request.body),
+    handler: async (request) => authService.refresh(app.db, request.body, app.byokAllowlist),
   });
 
   // ---- POST /api/v1/auth/logout（需 Access Token） ----

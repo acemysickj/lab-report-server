@@ -15,6 +15,7 @@ import {
   REFRESH_TOKEN_TTL_SECONDS,
   PRIVACY_POLICY_VERSION,
   TERMS_VERSION,
+  byokAllowedFor,
 } from '../config.js';
 import {
   createUserWithAccount,
@@ -34,8 +35,8 @@ import { closeoutForDeletion } from './wallet.service.js';
 const nowIso = () => new Date().toISOString();
 const plusSeconds = (seconds) => new Date(Date.now() + seconds * 1000).toISOString();
 
-/** 注册（P-001/P-002）：勾选状态与版本必须与服务器当前文档一致，否则 400。 */
-export async function register(db, { email, password, consent }) {
+/** 注册（P-001/P-002）：勾选状态与版本必须与服务器当前文档一致，否则 400。byokAllowlist：BK-008 下发 byokAllowed。 */
+export async function register(db, { email, password, consent }, byokAllowlist) {
   if (!consent || consent.acceptedPrivacyPolicy !== true || consent.acceptedTermsOfService !== true) {
     throw httpError(400, 'consent_required', '必须阅读并勾选同意《隐私政策》与《服务协议》后方可注册');
   }
@@ -58,22 +59,22 @@ export async function register(db, { email, password, consent }) {
     privacyPolicyVersion: consent.privacyPolicyVersion,
     termsVersion: consent.termsVersion,
   });
-  return { userId, email: normalizedEmail };
+  return { userId, email: normalizedEmail, byokAllowed: byokAllowedFor(byokAllowlist, normalizedEmail) };
 }
 
 /** 登录：校验 Argon2id；错误统一 invalid_credentials（不区分邮箱不存在/密码错，防枚举）。 */
-export async function login(db, { email, password, deviceId }) {
+export async function login(db, { email, password, deviceId }, byokAllowlist) {
   const normalizedEmail = String(email ?? '').trim().toLowerCase();
   const user = findUserByEmail(db, normalizedEmail);
   const ok = Boolean(user) && user.status === 'active' && (await verifyPassword(user.password_hash, password));
   if (!ok) {
     throw httpError(401, 'invalid_credentials', '邮箱或密码不正确');
   }
-  return issueTokens(db, { userId: user.id, deviceId, familyId: randomUUID() });
+  return issueTokens(db, { userId: user.id, email: normalizedEmail, byokAllowlist, deviceId, familyId: randomUUID() });
 }
 
 /** 签发双 Token（login/refresh 共用）。行操作在单个 better-sqlite3 同步事务内完成。 */
-async function issueTokens(db, { userId, deviceId, familyId }) {
+async function issueTokens(db, { userId, email, byokAllowlist, deviceId, familyId }) {
   const refresh = generateRefreshToken();
   const rotate = db.transaction(() =>
     createSession(db, {
@@ -92,11 +93,13 @@ async function issueTokens(db, { userId, deviceId, familyId }) {
     tokenType: 'Bearer',
     expiresIn: ACCESS_TOKEN_TTL_SECONDS,
     user: { id: userId },
+    // BK-008（ADR-003）：BYOK 白名单标志随登录态下发（客户端 fail-open：仅 false 才隐藏）
+    byokAllowed: byokAllowedFor(byokAllowlist, email),
   };
 }
 
 /** Refresh Rotation + 复用检测：已轮换/已作废的 refresh 再次出现 → 整族作废。 */
-export async function refresh(db, { refreshToken }) {
+export async function refresh(db, { refreshToken }, byokAllowlist) {
   if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
     throw httpError(401, 'invalid_refresh_token', '无效的刷新令牌');
   }
@@ -138,6 +141,7 @@ export async function refresh(db, { refreshToken }) {
     tokenType: 'Bearer',
     expiresIn: ACCESS_TOKEN_TTL_SECONDS,
     user: { id: session.user_id },
+    byokAllowed: byokAllowedFor(byokAllowlist, user.email),
   };
 }
 

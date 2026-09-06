@@ -151,7 +151,7 @@ test('reserve→settle: two-phase atomic consume with ledger balance_after', asy
     // 余额接口（auth）反映同一口径
     const balanceRes = await app.inject({ method: 'GET', url: '/api/v1/wallet/balance', headers: authHeaders(token) });
     assert.equal(balanceRes.statusCode, 200);
-    assert.deepEqual(balanceRes.json(), { currency: 'credits', balance: 100, openReservations: 5, available: 95 });
+    assert.deepEqual(balanceRes.json(), { currency: 'credits', byokAllowed: false, balance: 100, openReservations: 5, available: 95 });
 
     const settle = settleReservation(app.db, { reservationId, jobId: 'job-1' });
     assert.equal(settle.balance, 95);

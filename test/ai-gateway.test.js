@@ -14,7 +14,7 @@ import { MODEL_MAP } from '../src/ai/model-map.js';
 import { createHttpTransport, buildUpstreamRequest } from '../src/ai/transport.js';
 import { createContentCache } from '../src/ai/content-cache.js';
 import { createOrder } from '../src/repositories/wallet.repository.js';
-import { grantCredits } from '../src/services/wallet.service.js';
+import { grantCredits, getWalletState, listLedger } from '../src/services/wallet.service.js';
 import { compensate } from '../src/services/ai-gateway.service.js';
 import { PRICING } from '../src/wallet/pricing.js';
 
@@ -85,8 +85,11 @@ async function registerLoginFund(app, email = 'ai@test.dev', credits = 100) {
   });
   const body = login.json();
   const userId = Number(decodeJwt(body.accessToken).sub);
-  const orderId = createOrder(app.db, { userId, tier: 'tier_9_9', priceCents: 990, credits });
-  grantCredits(app.db, { userId, orderId });
+  if (credits > 0) {
+    // orders.credits CHECK(>0)：零额度场景只注册不建单（BK-008 免费操作无余额要求）
+    const orderId = createOrder(app.db, { userId, tier: 'tier_9_9', priceCents: 990, credits });
+    grantCredits(app.db, { userId, orderId });
+  }
   return { userId, token: body.accessToken };
 }
 
@@ -511,18 +514,67 @@ test('ai_not_configured: 503 when key missing; app still boots; client model fie
   }
 });
 
-test('free operation cannot go through gateway; unknown operation 400', async () => {
+test('BK-008 step3: free op (parse_template) goes through gateway, completes with 0 credits, no wallet writes; unknown operation 400', async () => {
   const { app, tmp } = await makeApp();
   try {
-    const { token } = await registerLoginFund(app);
-    const free = await app.inject({
+    // 零额度用户也能解析模板（免费功能不再依赖 BYOK，ADR-003 第 4 条）——credits=0 只注册不充值
+    const { userId, token } = await registerLoginFund(app, 'free@test.dev', 0);
+    const res = await app.inject({
       method: 'POST',
       url: '/api/v1/ai/jobs',
       headers: { authorization: `Bearer ${token}` },
+      payload: { operation: 'parse_template', payload: { user: '模板正文' } },
+    });
+    assert.equal(res.statusCode, 200);
+    const events = parseSse(res.body);
+    const done = events.find((e) => e.event === 'done');
+    assert.equal(done.data.credits, 0);
+    assert.equal(clientParse(res.body), '第一段第二段');
+
+    // 钱包零写入：余额 0、无预扣、无流水
+    const wallet = getWalletState(app.db, userId);
+    assert.equal(wallet.balance, 0);
+    assert.equal(wallet.openReservations, 0);
+    assert.equal(listLedger(app.db, { userId, limit: 10 }).entries.length, 0);
+
+    // 任务行落 completed、credits 0、无预扣关联
+    const jobView = events.find((e) => e.event === 'job').data;
+    const status = await app.inject({
+      method: 'GET',
+      url: `/api/v1/ai/jobs/${jobView.jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(status.json().status, 'completed');
+    assert.equal(status.json().creditsCharged, 0);
+
+    // 免费操作上游全挂 → failed 终态且钱包仍零写入（无预扣可补偿）
+    const transport = fakeTransport({ plan: 'all_down' });
+    const { app: app2, tmp: tmp2 } = await makeApp({ transport });
+    const { userId: u2, token: t2 } = await registerLoginFund(app2, 'free2@test.dev', 0);
+    const fail = await app2.inject({
+      method: 'POST',
+      url: '/api/v1/ai/jobs',
+      headers: { authorization: `Bearer ${t2}` },
       payload: { operation: 'parse_template', payload: { user: 'x' } },
     });
-    assert.equal(free.statusCode, 400);
-    assert.equal(free.json().error.code, 'operation_free');
+    assert.equal(fail.statusCode, 200);
+    const failEvents = parseSse(fail.body);
+    assert.ok(failEvents.some((e) => e.event === 'error'));
+    const failedWallet = getWalletState(app2.db, u2);
+    assert.equal(failedWallet.balance, 0);
+    assert.equal(failedWallet.openReservations, 0);
+    await app2.close();
+    fs.rmSync(tmp2, { recursive: true, force: true });
+
+    // 未知操作仍 400（服务端权威定价表之外一律拒绝）
+    const unknown = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/jobs',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { operation: 'generate_everything', payload: { user: 'x' } },
+    });
+    assert.equal(unknown.statusCode, 400);
+    assert.equal(unknown.json().error.code, 'unknown_operation');
   } finally {
     await app.close();
     fs.rmSync(tmp, { recursive: true, force: true });

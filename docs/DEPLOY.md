@@ -26,6 +26,7 @@ git fetch --depth 1 origin tag <TAG> && git checkout <TAG>   # 首次直接拉 t
 | `AUTH_RATE_PER_MINUTE` / `AUTH_RATE_PER_HOUR` | 认证防爆破：默认 5/30（按 IP，login/register/refresh 共享预算；429 不泄露邮箱存在性）。**前置依赖：Nginx 必须覆写 X-Forwarded-For 为 $remote_addr（见 deploy/ 示例），否则全站共享一个限流桶** |
 | `DEEPSEEK_THINKING_TYPE` | V4 思考模式：默认 `disabled`（报告写作直出，快且省）；`enabled` 开启深度推理（首字延迟分钟级，思考 token 计费，客户端会显示「AI 正在思考」） |
 | `AI_UPSTREAM_TIMEOUT_MS` | 上游超时，默认 300000（5 分钟；思考模式长任务务必放宽） |
+| `BYOK_ALLOWLIST` | 可选（BK-008/ADR-003）：逗号分隔邮箱白名单（如 `a@x.com,b@y.com`，trim+小写归一）。**未配置/空=全员 byokAllowed=false（BYOK 默认不可用）**；名单内用户登录/注册/refresh/余额接口收到 `byokAllowed:true`。仅客户端 UI 软控制（正式版加固服务端资格门）。改名单 → 改 env 重启生效 |
 | `DATA_DIR` | `/srv/lab-report-server/data`（默认 `./data` 亦可，二者取一固定） |
 | `PORT` / `HOST` | `3000` / `127.0.0.1`（ecosystem.config.cjs 已固化；Fastify 绝不直接暴露公网） |
 

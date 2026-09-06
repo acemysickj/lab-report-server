@@ -18,23 +18,25 @@ import {
   getWalletState,
 } from './wallet.service.js';
 
-/** 创建任务（幂等）：reserve + ai_jobs(running)，统一返回 { replayed, job }。 */
+/** 创建任务（幂等）：reserve + ai_jobs(running)，统一返回 { replayed, job }。
+ * BK-008 step3（ADR-003 第 4 条）：免费操作（PRICING=0，如 parse_template）同样经平台网关
+ * 执行——登录用户不再依赖 BYOK 解析模板；零扣费=不建预扣（reservation_id NULL），失败无补偿。 */
 export function createJob(db, { userId, operation, payload, idempotencyKey, requestId }) {
   const credits = priceOf(operation);
   if (credits === null) {
     throw httpError(400, 'unknown_operation', `未知计费操作：${operation}`);
   }
-  if (credits === 0) {
-    throw httpError(400, 'operation_free', '免费操作不经 AI 网关计费（本地/免费接口处理）');
-  }
+  const free = credits === 0;
   if (!idempotencyKey) {
     // 无幂等键：每请求独立任务（jobId 天然唯一）
-    return { replayed: false, job: createJobOnce(db, { userId, operation, payload, requestId }) };
+    return { replayed: false, job: createJobOnce(db, { userId, operation, payload, requestId, free }) };
   }
-  // 余额预检（最佳努力，TOCTOU 由 reserve 原子性兜底）：避免 402 消耗掉幂等键
-  const wallet = getWalletState(db, userId);
-  if (wallet.available < credits) {
-    throw httpError(402, 'insufficient_credits', `可用额度不足（需 ${credits}，可用 ${wallet.available}）`);
+  // 余额预检（最佳努力，TOCTOU 由 reserve 原子性兜底）：避免 402 消耗掉幂等键（免费操作无余额要求）
+  if (!free) {
+    const wallet = getWalletState(db, userId);
+    if (wallet.available < credits) {
+      throw httpError(402, 'insufficient_credits', `可用额度不足（需 ${credits}，可用 ${wallet.available}）`);
+    }
   }
   const requestHash = hashRequest({ userId, operation, payload });
   const result = runIdempotent(db, {
@@ -43,7 +45,7 @@ export function createJob(db, { userId, operation, payload, idempotencyKey, requ
     idemKey: idempotencyKey,
     requestHash,
     fn: () => {
-      const job = createJobOnce(db, { userId, operation, payload, requestId });
+      const job = createJobOnce(db, { userId, operation, payload, requestId, free });
       return { resultRef: job.jobId, job };
     },
   });
@@ -58,7 +60,21 @@ export function createJob(db, { userId, operation, payload, idempotencyKey, requ
   return { replayed: false, job: result.outcome.job };
 }
 
-function createJobOnce(db, { userId, operation, payload, requestId }) {
+function createJobOnce(db, { userId, operation, payload, requestId, free }) {
+  // 免费操作：无预扣（reservationId=null → executeJob/compensate 全走零扣费分支）
+  if (free) {
+    const jobId = randomUUID();
+    jobRepo.insertJob(db, {
+      jobId,
+      userId,
+      operation,
+      model: modelChain()[0],
+      status: 'running',
+      reservationId: null,
+      requestId,
+    });
+    return { jobId, reservationId: null, userId, operation, status: 'running' };
+  }
   // L3：reserve 是已提交事务——此后任何失败路径必须补偿（release/refund）再抛错
   const { reservationId } = reserveCredits(db, { userId, operation });
   const jobId = randomUUID(); // 独立于 X-Request-Id
@@ -132,17 +148,19 @@ export async function executeJob(db, { job, payload, transport, onEvent, onThink
         }
         usageAcc.promptTokens += attemptUsage.promptTokens;
         usageAcc.completionTokens += attemptUsage.completionTokens;
-        // 流完整结束 → 核销扣费（此后失败走 refund 补偿）
-        const settle = settleReservation(db, { reservationId, jobId });
-        settled = true;
-        settledAmount = settle.amount;
-        jobRepo.markJobStatus(db, { jobId, status: 'completed', creditsCharged: settle.amount });
+        // 流完整结束 → 核销扣费（此后失败走 refund 补偿）；免费操作零扣费直落 completed
+        const amount = reservationId
+          ? settleReservation(db, { reservationId, jobId }).amount
+          : 0;
+        settled = Boolean(reservationId);
+        settledAmount = reservationId ? amount : null;
+        jobRepo.markJobStatus(db, { jobId, status: 'completed', creditsCharged: amount });
         // 裁决③：全文只进进程内存缓存（有界 TTL），供断线后 GET /jobs/:id/content 取回
         if (contentCache) contentCache.put(jobId, text);
         // COM-005 成本计量：仅元数据进内存环（token/时长/扣费），正文绝不入计量（P-005/P-006）
-        recordUsage(model, settle.amount);
-        onEvent('done', { jobId, model, credits: settle.amount, textLength: text.length });
-        return { status: 'completed', model, credits: settle.amount, textLength: text.length };
+        recordUsage(model, amount);
+        onEvent('done', { jobId, model, credits: amount, textLength: text.length });
+        return { status: 'completed', model, credits: amount, textLength: text.length };
       } catch (err) {
         lastError = err;
         // 失败尝试同样产生上游成本——计入累计后再决定重试/失败
@@ -160,8 +178,13 @@ export async function executeJob(db, { job, payload, transport, onEvent, onThink
   } catch (err) {
     // COM-005：失败任务同样计入成本观测（credits 记已结算额——若 settled 后补偿，用户侧已退）
     recordUsage(lastModel, settledAmount ?? 0);
-    // L3 补偿：先补偿再抛错/上报（refundAmount 用内存中的结算金额，不依赖回库读值）
-    compensate(db, { jobId, reservationId, settled, refundAmount: settledAmount, errorCode: err.code ?? 'ai_failed' });
+    if (!reservationId) {
+      // 免费操作失败：无预扣可释放、无扣款可退——只落终态
+      jobRepo.markJobStatus(db, { jobId, status: 'failed', errorCode: err.code ?? 'ai_failed' });
+    } else {
+      // L3 补偿：先补偿再抛错/上报（refundAmount 用内存中的结算金额，不依赖回库读值）
+      compensate(db, { jobId, reservationId, settled, refundAmount: settledAmount, errorCode: err.code ?? 'ai_failed' });
+    }
     onEvent('error', { code: err.code ?? 'ai_failed', jobId }); // 只含错误码+jobId（P-005）
     return { status: settled ? 'refunded' : 'failed', errorCode: err.code ?? 'ai_failed' };
   }

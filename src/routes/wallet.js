@@ -3,6 +3,7 @@
 // 在服务端调用，不经客户端直发——客户端只提交 operation + business payload（契约安全铁律）。
 import * as walletService from '../services/wallet.service.js';
 import { TIERS, OPERATIONS, priceOf } from '../wallet/pricing.js';
+import { byokAllowedFor } from '../config.js';
 
 const OPERATION_ENUM = Object.values(OPERATIONS);
 
@@ -12,6 +13,8 @@ export default async function walletRoutes(app) {
     preHandler: [app.authenticate],
     handler: async (request) => ({
       currency: 'credits',
+      // BK-008（ADR-003）：状态通道下发 BYOK 白名单标志（客户端从本响应派生，双通道之一）
+      byokAllowed: byokAllowedFor(app.byokAllowlist, request.user.email),
       ...(await walletService.getWalletState(app.db, request.user.id)),
     }),
   });

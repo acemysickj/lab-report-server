@@ -10,7 +10,8 @@
 ```jsonc
 // 请求体（白名单外字段一律 400，服务端不作静默剥离）
 {
-  "operation": "generate_section",        // 计费操作，见 PRICING（generate_section/generate_chart）
+  "operation": "generate_section",        // 见 PRICING：计费 generate_section/generate_chart；
+                                          // 免费 parse_template（BK-008 step3 起同走本网关，0 扣费）
   "payload": {
     "user": "（必填，1–32000 字符）",
     "system": "（可选，≤8000 字符，前置 system message）",
@@ -41,8 +42,23 @@
 **fallback 纪律**：模型在**零增量**失败时才切换备模型重试；已产出增量后半途失败**不重试**（fallback 重跑全量会造成「半截+全文」拼接污染），直接走失败路径释放额度——宁失败不串文。
 
 错误码（`event: error` 与 JSON 错误整形共用）：`ai_not_configured`(503 密钥门)、
-`insufficient_credits`(402, hijack 前)、`unknown_operation`/`operation_free`/`invalid_payload`(400)、
+`insufficient_credits`(402, hijack 前，仅计费操作)、`unknown_operation`/`invalid_payload`(400)、
 `idempotency_retry`/`request_in_progress`(409)、`ai_upstream_error`/`ai_auth_error`(502)。
+（网关不再对免费操作抛 `operation_free`——BK-008 step3 起免费操作 0 扣费过网关；
+该错误码仅存于服务层 `reserveCredits` 守卫，见 §2.1。）
+
+### 2.1 免费操作（BK-008 step3，ADR-003 第 4 条）
+
+`parse_template` 同走本网关：登录用户即可调用（无余额要求），流式协议与上文完全一致，
+`done.credits` 恒为 0；**不建预扣、不写账本**，任务行 `credits_charged=0`、`reservation_id` 为空；
+上游失败 → `error` 事件 + `failed` 终态（无补偿路径）。免费流量占上游配额，由限流（2/10/50）兜底。
+
+### 2.2 BYOK 白名单标志（BK-008 step1，ADR-003）
+
+`POST /auth/login`、`POST /auth/register`(201)、`POST /auth/refresh` 响应与 `GET /wallet/balance`
+响应均携带 `byokAllowed: boolean`：env `BYOK_ALLOWLIST`（逗号分隔邮箱，trim+小写归一）名单内为
+`true`，**未配置/空名单=全员 `false`**。客户端契约（fail-open）：仅 `false` 隐藏 BYOK 入口；
+服务端软控制仅做 UI 显隐，正式版另加服务端资格门（403 `byok_not_approved`，另开任务）。
 
 ## 3. 断线续存（裁决③）
 
