@@ -11,3 +11,9 @@
 - 铁律引用：P-005（正文不入日志）、P-006（正文不入库/摘要除外）、错误码表见 `docs/COM-004-INTEGRATION.md`。
 - 排障入口：`ai_jobs.error_code` → `/api/v1/admin/usage` → `credit_ledger`（顺序见 `docs/INCIDENT-RUNBOOK.md`）。
 - 测试：`npm test`（node --test）；绿了才允许 commit；Mimosa 拦截走手动提交（见共享规程铁律 4）。
+
+### 发布门禁（2026-09-06 用户指令）
+
+**客户端 Release 的 publish 必须等用户验收通过并明确指令**。agent 可自主完成 draft 构建、
+资产上传、发布说明撰写，但最后一步 publish 必须等用户说“发布”。服务端 tag/部署同理：
+重大变更部署后先请用户冒烟，再视为完成。
