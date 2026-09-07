@@ -6,14 +6,18 @@
 const fs = require('fs');
 const path = require('path');
 function loadEnvProduction() {
-  const envFile = path.join(__dirname, '.env.production');
+  // 绝对路径：PM2 daemon 求值配置时的 cwd 不可靠，禁止依赖相对路径
+  const envFile = '/srv/lab-report-server/.env.production';
   const env = {};
   try {
     for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-      if (m) env[m[1]] = m[2];
+      if (m) env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
     }
-  } catch (e) { /* 无 .env.production（本地开发）→ 跳过 */ }
+    console.log('[ecosystem] .env.production loaded:', Object.keys(env).join(', '));
+  } catch (e) {
+    console.log('[ecosystem] .env.production not readable:', e.message);
+  }
   return env;
 }
 
