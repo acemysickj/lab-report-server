@@ -1,5 +1,22 @@
 // ecosystem.config.cjs — PM2 进程定义（契约：单进程 fork / max_memory_restart 512M / autorestart）
 // 注意：package.json 为 ESM（type: module），故 PM2 配置使用 .cjs 扩展名。
+//
+// .env.production 加载：PM2 reload --update-env 只继承当前 shell 的 env，不会读 .env.production。
+// 此处在配置求值时主动解析该文件（KEY=VALUE 行），注入 env 块——文件不存在则跳过（本地开发）。
+const fs = require('fs');
+const path = require('path');
+function loadEnvProduction() {
+  const envFile = path.join(__dirname, '.env.production');
+  const env = {};
+  try {
+    for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m) env[m[1]] = m[2];
+    }
+  } catch (e) { /* 无 .env.production（本地开发）→ 跳过 */ }
+  return env;
+}
+
 module.exports = {
   apps: [
     {
@@ -9,13 +26,14 @@ module.exports = {
       instances: 1,
       autorestart: true,
       max_memory_restart: '512M',
-      env: {
+      env: Object.assign({
         NODE_ENV: 'production',
         HOST: '127.0.0.1',   // 契约：只监听 127.0.0.1，不暴露公网（Nginx 在前）
         PORT: '3000',
         DATA_DIR: './data',
-        // AUTH_JWT_SECRET：生产由部署环境注入（≥32 字符，只存服务器环境，不入 git）
-      },
+        // AUTH_JWT_SECRET / DEEPSEEK_API_KEY / ADMIN_TOKEN / BYOK_ALLOWLIST 等
+        // 由 .env.production 注入（本文件上方 loadEnvProduction() 读取）
+      }, loadEnvProduction()),
       out_file: 'logs/pm2-out.log',
       error_file: 'logs/pm2-error.log',
       merge_logs: true,
