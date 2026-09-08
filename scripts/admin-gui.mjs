@@ -41,28 +41,15 @@ function page(serverUrl) {
   <label>用户注册邮箱</label>
   <input type="text" id="email" list="knownEmails" placeholder="用户注册时使用的邮箱">
   <datalist id="knownEmails"></datalist>
-  <label>操作类型</label>
+  <label>档位</label>
   <div class="tiers">
-    <label><input type="radio" name="op" value="grant" checked onchange="opChanged()"><b>发额度</b><span>按套餐档位</span></label>
-    <label><input type="radio" name="op" value="adjust" onchange="opChanged();document.getElementById('adjBox').style.display='block'"><b>扣/调额度</b><span>自定义数量（发放失误纠错）</span></label>
+    <label><input type="radio" name="tier" value="tier_9_9"><b>¥9.9</b><span>100 额度</span></label>
+    <label><input type="radio" name="tier" value="tier_29_9"><b>¥29.9</b><span>350 额度</span></label>
+    <label><input type="radio" name="tier" value="tier_49_9" checked><b>¥49.9（主推）</b><span>700 额度</span></label>
   </div>
-  <div id="grantBox">
-    <label>档位</label>
-    <div class="tiers">
-      <label><input type="radio" name="tier" value="tier_9_9"><b>¥9.9</b><span>100 额度</span></label>
-      <label><input type="radio" name="tier" value="tier_29_9"><b>¥29.9</b><span>350 额度</span></label>
-      <label><input type="radio" name="tier" value="tier_49_9" checked><b>¥49.9（主推）</b><span>700 额度</span></label>
-    </div>
-  </div>
-  <div id="adjBox" style="display:none;">
-    <label>调整数量（正=加，负=扣；扣不可超过当前余额）</label>
-    <input type="text" id="adjDelta" placeholder="例如 -5 或 3">
-    <label>调整原因（必填，会记录在账本）</label>
-    <input type="text" id="adjNote" placeholder="例如：发放失误扣回">
-  </div>
-  <button id="grantBtn">确认执行</button>
+  <button id="grantBtn">确认发放</button>
   <div class="result" id="result"></div>
-  <div class="hint">发放前请已在微信确认到账；扣额度请先与用户核对。本页面只在本机 127.0.0.1 运行，用完关闭窗口即可。</div>
+  <div class="hint">发放前请已在微信确认到账。本页面只在本机 127.0.0.1 运行，用完关闭窗口即可。</div>
 </div>
 <script>
   const tokenEl = document.getElementById("token");
@@ -78,55 +65,29 @@ function page(serverUrl) {
       dl.appendChild(o);
     });
   }).catch(function () {});
-  function opChanged() {
-    const isAdjust = document.querySelector('input[name=op]:checked').value === "adjust";
-    document.getElementById("grantBox").style.display = isAdjust ? "none" : "block";
-    if (!isAdjust) document.getElementById("adjBox").style.display = "none";
-    else document.getElementById("adjBox").style.display = "block";
-  }
-  window.opChanged = opChanged;
   document.getElementById("grantBtn").addEventListener("click", async function () {
     const btn = this, box = document.getElementById("result");
-    const op = document.querySelector('input[name=op]:checked').value;
     box.className = "result"; box.style.display = "block";
-    box.textContent = op === "adjust" ? "调整中…" : "发放中…";
+    box.textContent = "发放中…";
     btn.disabled = true;
     try {
       localStorage.setItem("adminToken", tokenEl.value);
-      const email = document.getElementById("email").value.trim();
-      let res, d;
-      if (op === "adjust") {
-        const delta = parseInt(document.getElementById("adjDelta").value, 10);
-        if (!delta) throw new Error("请填写调整数量（非零整数）");
-        res = await fetch("/api/adjust", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token: tokenEl.value, email, delta,
-            note: document.getElementById("adjNote").value.trim() || "运营调整"
-          })
-        });
-        d = await res.json();
-        if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
-        box.className = "result ok";
-        box.textContent = "✔ 已" + (delta > 0 ? "发放" : "扣减") + " " + Math.abs(d.delta) + " 额度，" + d.email + " 当前余额 " + d.balance + (d.replayed ? "（重复请求，未重复执行）" : "");
-      } else {
-        res = await fetch("/api/grant", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            token: tokenEl.value, email,
-            tier: document.querySelector('input[name=tier]:checked').value
-          })
-        });
-        d = await res.json();
-        if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
-        box.className = "result ok";
-        box.textContent = "✔ 已发放 " + d.credits + " 额度，" + d.email + " 当前余额 " + d.balance + (d.replayed ? "（重复请求，未重复发放）" : "");
-      }
+      const res = await fetch("/api/grant", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token: tokenEl.value,
+          email: document.getElementById("email").value.trim(),
+          tier: document.querySelector('input[name=tier]:checked').value
+        })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "HTTP " + res.status);
+      box.className = "result ok";
+      box.textContent = "✔ 已发放 " + d.credits + " 额度，" + d.email + " 当前余额 " + d.balance + (d.replayed ? "（重复请求，未重复发放）" : "");
     } catch (e) {
       box.className = "result err";
-      box.textContent = "✗ " + (e.message || "操作失败");
+      box.textContent = "✗ " + (e.message || "发放失败");
     } finally { btn.disabled = false; }
   });
 </script>
@@ -155,18 +116,6 @@ export function createGuiServer({ serverUrl, port = 8765, host = '127.0.0.1' } =
         });
         const body = await r.json().catch(() => ({}));
         return json(r.ok ? 200 : 502, r.ok ? body : { error: body?.error?.message || '获取失败' });
-      }
-      if (req.method === 'POST' && req.url === '/api/adjust') {
-        let body = '';
-        for await (const c of req) body += c;
-        const { token, email, delta, note } = JSON.parse(body || '{}');
-        const r = await fetch(serverUrl.replace(/\/+$/, '') + '/api/v1/admin/adjust', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-          body: JSON.stringify({ email, delta, note })
-        });
-        const rb = await r.json().catch(() => ({}));
-        return json(r.ok ? 200 : 502, r.ok ? rb : { error: rb?.error?.message || '调整失败' });
       }
       if (req.method === 'POST' && req.url === '/api/grant') {
         let body = '';
