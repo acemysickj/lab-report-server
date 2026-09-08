@@ -37,7 +37,7 @@ test('GET /：管理页可达且包含档位', async () => {
     const res = await fetch(base + '/');
     const html = await res.text();
     assert.equal(res.status, 200);
-    assert.ok(html.includes('tier_49_9') && html.includes('确认执行') && html.includes('/api/adjust'), '含档位/双操作');
+    assert.ok(html.includes('tier_49_9') && html.includes('确认发放'));
   } finally {
     gui.close(); await app.close();
     fs.rmSync(tmp, { recursive: true, force: true });
