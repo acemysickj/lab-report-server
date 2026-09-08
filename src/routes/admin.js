@@ -1,12 +1,12 @@
 // src/routes/admin.js — 极简 Admin（COM-005）
 // 守卫：buildApp 未注入 adminToken（env ADMIN_TOKEN 未配置）→ 本路由全部 404（整体隐藏）；
 // 已配置 → Bearer 令牌比对（timingSafeEqual 防时序侧信道）。
-// 只读聚合 + 额度发放（生产发放路径，走 wallet 既有事务与台账审计）；不做任何改价/删户入口。
+// 只读聚合 + 额度发放/调整（生产发放路径，走钱包既有事务与台账审计）；不做任何改价/删户入口。
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import { httpError } from '../lib/http-error.js';
 import * as adminRepo from '../repositories/admin.repository.js';
-import { createOrder } from '../repositories/wallet.repository.js';
+import { createOrder, getAccount, insertLedgerEntry, setBalance } from '../repositories/wallet.repository.js';
 import { grantCredits, runIdempotent } from '../services/wallet.service.js';
 import { findTier } from '../wallet/pricing.js';
 
@@ -115,6 +115,78 @@ export default async function adminRoutes(app, { adminToken }) {
       if (result.replayed) {
         const fresh = adminRepo.findUserByEmail(app.db, user.email);
         return { userId: user.id, email: user.email, credits: tierInfo.credits, balance: fresh?.balance ?? null, replayed: true };
+      }
+      return result.outcome;
+    }
+  );
+
+  app.post(
+    '/admin/adjust',
+    {
+      preHandler: [guard],
+      schema: {
+        body: {
+          type: 'object',
+          required: ['email', 'delta', 'note'],
+          additionalProperties: false,
+          properties: {
+            email: { type: 'string', minLength: 3, maxLength: 254 },
+            delta: { type: 'integer' }, // 可负；≠0 在 handler 校验（干净的错误码而非 FST_ERR_VALIDATION）
+            note: { type: 'string', minLength: 2, maxLength: 128 }, // 审计留痕必填
+            idempotencyKey: { type: 'string', minLength: 8, maxLength: 128 }, // 可选：防重复调整
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { email, delta, note, idempotencyKey } = request.body;
+      if (delta === 0) throw httpError(400, 'invalid_delta', 'delta 不能为 0');
+      const user = adminRepo.findUserByEmail(app.db, String(email).trim().toLowerCase());
+      if (!user) throw httpError(404, 'user_not_found', '用户不存在');
+      const doAdjust = () => {
+        // 单事务原子：余额校验 → adjust 流水 → setBalance（超扣即整体回滚，余额不变）
+        const tx = app.db.transaction(() => {
+          const account = getAccount(app.db, user.id);
+          if (!account) throw httpError(404, 'user_not_found', '用户不存在');
+          const next = account.balance + delta;
+          if (next < 0) {
+            throw httpError(409, 'insufficient_balance', `余额不足（当前 ${account.balance}，调整 ${delta}）`);
+          }
+          const ledgerId = insertLedgerEntry(app.db, {
+            userId: user.id,
+            type: 'adjust',
+            delta,
+            balanceAfter: next,
+            note: `admin adjust: ${note}`,
+          });
+          setBalance(app.db, { userId: user.id, balance: next });
+          return ledgerId;
+        });
+        const ledgerId = tx();
+        return {
+          resultRef: `ledger:${ledgerId}`,
+          userId: user.id,
+          email: user.email,
+          delta,
+          balance: getAccount(app.db, user.id).balance,
+        };
+      };
+      if (!idempotencyKey) return doAdjust();
+      // 幂等调整：同 (目标用户, admin_adjust, key) 只执行一次；重复请求回执 replayed + 当前余额
+      const result = runIdempotent(app.db, {
+        userId: user.id,
+        operation: 'admin_adjust',
+        idemKey: idempotencyKey,
+        requestHash: createHash('sha256').update(JSON.stringify([email, delta, note])).digest('hex'),
+        fn: doAdjust,
+      });
+      if (result.replayed) {
+        if (result.status !== 'completed') {
+          // 首次执行已失败（如超扣 409）——无成果可回执，让调用方换键重试
+          throw httpError(409, 'idempotency_retry', '同幂等键首次执行未成功，请更换幂等键重试');
+        }
+        const fresh = adminRepo.findUserByEmail(app.db, user.email);
+        return { userId: user.id, email: user.email, delta, balance: fresh?.balance ?? null, replayed: true };
       }
       return result.outcome;
     }

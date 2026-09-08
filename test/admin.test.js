@@ -153,3 +153,68 @@ test('usage：计量快照端点（含限流快照）', async () => {
     assert.equal(view.rateLimiter.limits.maxConcurrent, 2, '限流口径可见');
   } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
+
+// ---- BK-010：/admin/adjust（人工调整，可负；审计 + 幂等） ----
+
+test('adjust：正值加/负值减，ledger type=adjust 带 admin adjust: 前缀；超扣 409 且余额不变', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    await makeUser(app, 'adj@test.dev', 50);
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+
+    const add = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'adj@test.dev', delta: 30, note: '补偿故障' } });
+    assert.equal(add.statusCode, 200);
+    assert.equal(add.json().delta, 30);
+    assert.equal(add.json().balance, 80);
+
+    const sub = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'adj@test.dev', delta: -20, note: '误发回收' } });
+    assert.equal(sub.statusCode, 200);
+    assert.equal(sub.json().balance, 60);
+
+    const over = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'adj@test.dev', delta: -61, note: '超扣尝试' } });
+    assert.equal(over.statusCode, 409);
+    assert.equal(over.json().error.code, 'insufficient_balance');
+    assert.equal(app.db.prepare("SELECT balance FROM accounts WHERE user_id=(SELECT id FROM users WHERE email='adj@test.dev')").get().balance, 60, '超扣后余额不变');
+
+    const rows = app.db.prepare("SELECT delta, note FROM credit_ledger WHERE type='adjust' AND user_id=(SELECT id FROM users WHERE email='adj@test.dev') ORDER BY id").all();
+    assert.deepEqual(rows.map((r) => r.delta), [30, -20], '只落两条成功流水（409 不落）');
+    assert.ok(rows.every((r) => String(r.note).startsWith('admin adjust:')), 'note 带 admin adjust: 前缀');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('adjust 幂等：同 idempotencyKey 重复 POST 只执行一次并回执 replayed + 当前余额', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    await makeUser(app, 'adji@test.dev', 10);
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+    const payload = { email: 'adji@test.dev', delta: -5, note: '幂等扣减', idempotencyKey: 'adjust-idem-001' };
+    const first = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.json().balance, 5);
+    const second = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload });
+    assert.equal(second.statusCode, 200);
+    assert.equal(second.json().replayed, true, '回执 replayed');
+    assert.equal(second.json().balance, 5, '未重复扣减');
+    assert.equal(app.db.prepare("SELECT COUNT(*) AS n FROM credit_ledger WHERE type='adjust'").get().n, 1, '流水只有一条');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('adjust 拒绝路径：未知邮箱 404 / delta=0 400 / 非整数 400 / note 缺失 400 / 错令牌 401', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    await makeUser(app, 'rej@test.dev', 10);
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+    const unknown = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'nobody@test.dev', delta: 1, note: 'xx' } });
+    assert.equal(unknown.statusCode, 404);
+    const zero = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'rej@test.dev', delta: 0, note: 'xx' } });
+    assert.equal(zero.statusCode, 400);
+    assert.equal(zero.json().error.code, 'invalid_delta');
+    const frac = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'rej@test.dev', delta: 1.5, note: 'x' } });
+    assert.equal(frac.statusCode, 400);
+    const noNote = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers, payload: { email: 'rej@test.dev', delta: 1 } });
+    assert.equal(noNote.statusCode, 400);
+    const wrong = await app.inject({ method: 'POST', url: '/api/v1/admin/adjust', headers: { authorization: 'Bearer wrong-token' }, payload: { email: 'rej@test.dev', delta: 1, note: 'xx' } });
+    assert.equal(wrong.statusCode, 401);
+    assert.equal(wrong.json().error.code, 'invalid_admin_token');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
