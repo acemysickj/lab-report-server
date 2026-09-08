@@ -25,6 +25,20 @@ export async function grantRemote({ serverUrl, token, email, tier }) {
   return body; // { userId, email, credits, balance, replayed? }
 }
 
+/** 非交互核心（可测试）：调用 admin API 扣/调额度（delta 可正负，note 必填留审计）。 */
+export async function adjustRemote({ serverUrl, token, email, delta, note, idempotencyKey }) {
+  const res = await fetch(serverUrl.replace(/\/+$/, '') + '/api/v1/admin/adjust', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ email, delta, note, ...(idempotencyKey ? { idempotencyKey } : {}) }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((body.error && body.error.message) || `HTTP ${res.status}`);
+  }
+  return body; // { resultRef, userId, email, delta, balance, replayed? }
+}
+
 export function pickTier(choice) {
   const t = TIERS[String(choice).trim()];
   if (!t) throw new Error(`无效档位：${choice}（可选 1/2/3）`);
