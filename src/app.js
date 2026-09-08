@@ -8,7 +8,7 @@ import { verifyAccessToken } from './lib/tokens.js';
 import { httpError } from './lib/http-error.js';
 import { findUserById } from './repositories/user.repository.js';
 import { findSessionById } from './repositories/session.repository.js';
-import { RATE_LIMITS, AUTH_RATE_LIMITS, ADMIN_TOKEN, BYOK_ALLOWLIST } from './config.js';
+import { RATE_LIMITS, AUTH_RATE_LIMITS, ADMIN_TOKEN, BYOK_ALLOWLIST, ENV_PRODUCTION_PATH } from './config.js';
 import authRoutes from './routes/auth.js';
 import legalRoutes from './routes/legal.js';
 import walletRoutes from './routes/wallet.js';
@@ -55,6 +55,8 @@ export async function buildApp(options = {}) {
   app.decorate('adminToken', adminToken);
   // BK-008（ADR-003）：BYOK 白名单（Set<email>；测试可注入，缺省取 env BYOK_ALLOWLIST）
   app.decorate('byokAllowlist', options.byokAllowlist !== undefined ? options.byokAllowlist : BYOK_ALLOWLIST);
+  // BK-006：.env.production 路径（限流热配置持久化目标；测试可注入临时路径）
+  app.decorate('envProductionPath', options.envProductionPath ?? ENV_PRODUCTION_PATH);
   app.decorateRequest('user', null);
   app.decorateRequest('session', null);
 

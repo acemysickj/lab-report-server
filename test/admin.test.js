@@ -218,3 +218,102 @@ test('adjust 拒绝路径：未知邮箱 404 / delta=0 400 / 非整数 400 / not
     assert.equal(wrong.json().error.code, 'invalid_admin_token');
   } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
 });
+
+// ---- BK-006：限流热配置（GET/PATCH /admin/ratelimits） ----
+
+test('ratelimits GET：返回当前限流阈值 + envPath', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/admin/ratelimits', headers: { authorization: `Bearer ${SENTINEL_TOKEN}` } });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.deepEqual(body.limits, { maxConcurrent: 2, perMinute: 10, perHour: 50 });
+    assert.ok(typeof body.envPath === 'string');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('ratelimits PATCH：更新单字段，内存即时生效 + 持久化 .env', async () => {
+  const envTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-ratelimits-'));
+  const envPath = path.join(envTmp, '.env.production');
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN, envProductionPath: envPath });
+  try {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/ratelimits',
+      headers: { authorization: `Bearer ${SENTINEL_TOKEN}` },
+      payload: { maxConcurrent: 5 },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.limits.maxConcurrent, 5);
+    assert.equal(body.limits.perMinute, 10, '未提供字段不变');
+    assert.equal(body.persisted, true);
+    // 内存即时生效：GET 回读一致
+    const get = await app.inject({ method: 'GET', url: '/api/v1/admin/ratelimits', headers: { authorization: `Bearer ${SENTINEL_TOKEN}` } });
+    assert.equal(get.json().limits.maxConcurrent, 5);
+    // 持久化：.env 文件含新值
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    assert.ok(envContent.includes('RATE_MAX_CONCURRENT=5'), '.env 已写入新值');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(envTmp, { recursive: true, force: true }); }
+});
+
+test('ratelimits PATCH：同时更新三字段，.env 三行均更新', async () => {
+  const envTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-ratelimits2-'));
+  const envPath = path.join(envTmp, '.env.production');
+  fs.writeFileSync(envPath, 'AUTH_JWT_SECRET=keep-me\nRATE_MAX_CONCURRENT=2\nRATE_PER_MINUTE=10\nRATE_PER_HOUR=50\n', 'utf8');
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN, envProductionPath: envPath });
+  try {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/ratelimits',
+      headers: { authorization: `Bearer ${SENTINEL_TOKEN}` },
+      payload: { maxConcurrent: 10, perMinute: 100, perHour: 500 },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json().limits, { maxConcurrent: 10, perMinute: 100, perHour: 500 });
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    assert.ok(envContent.includes('AUTH_JWT_SECRET=keep-me'), 'secret 行不动');
+    assert.ok(envContent.includes('RATE_MAX_CONCURRENT=10'));
+    assert.ok(envContent.includes('RATE_PER_MINUTE=100'));
+    assert.ok(envContent.includes('RATE_PER_HOUR=500'));
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(envTmp, { recursive: true, force: true }); }
+});
+
+test('ratelimits PATCH：空 body 400 empty_patch；非正整数 400；错令牌 401', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+    const empty = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ratelimits', headers, payload: {} });
+    assert.equal(empty.statusCode, 400);
+    assert.equal(empty.json().error.code, 'empty_patch');
+    const zero = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ratelimits', headers, payload: { maxConcurrent: 0 } });
+    assert.equal(zero.statusCode, 400, 'minimum:1 校验');
+    const neg = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ratelimits', headers, payload: { perMinute: -1 } });
+    assert.equal(neg.statusCode, 400);
+    const frac = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ratelimits', headers, payload: { perHour: 1.5 } });
+    assert.equal(frac.statusCode, 400);
+    const wrong = await app.inject({ method: 'PATCH', url: '/api/v1/admin/ratelimits', headers: { authorization: 'Bearer wrong' }, payload: { maxConcurrent: 3 } });
+    assert.equal(wrong.statusCode, 401);
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('ratelimits PATCH：持久化失败（不可写路径）不阻断热更，回执 persisted:false', async () => {
+  // 构造一个必然写入失败的路径：用一个已存在的文件当作目录组件 → mkdirSync 抛 ENOTDIR
+  const blockerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-ratelimits-blocker-'));
+  const blockerFile = path.join(blockerDir, 'blocker');
+  fs.writeFileSync(blockerFile, 'x', 'utf8');
+  const badPath = path.join(blockerFile, '.env.production'); // blocker 是文件，其子路径不可创建
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN, envProductionPath: badPath });
+  try {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/ratelimits',
+      headers: { authorization: `Bearer ${SENTINEL_TOKEN}` },
+      payload: { maxConcurrent: 4 },
+    });
+    assert.equal(res.statusCode, 200, '热更本身成功（200 而非 500）');
+    assert.equal(res.json().persisted, false);
+    assert.ok(res.json().persistError, '含 persistError 说明');
+    assert.equal(res.json().limits.maxConcurrent, 4, '内存仍已更新');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(blockerDir, { recursive: true, force: true }); }
+});

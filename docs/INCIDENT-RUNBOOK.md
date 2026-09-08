@@ -36,7 +36,7 @@
 
 ### 3.1 能只修服务器的（用户不更新客户端）
 - AI 上游参数变化 → 改 `src/ai/transport.js`（adapter 层）→ push → 服务器 pull + reload
-- 限流误伤 → 调 `RATE_*` env → reload
+- 限流误伤 → `PATCH /api/v1/admin/ratelimits` 热调（BK-006，内存即时生效+持久化，无需重启）；例：`curl -X PATCH http://127.0.0.1:3000/api/v1/admin/ratelimits -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"perMinute":20,"perHour":100}'`
 - 功能异常但根因未明 → 先 kill switch（下文 §4）止血，再慢慢修
 
 ### 3.2 账号/额度类
@@ -74,6 +74,9 @@ node -e "const D=require('better-sqlite3');const db=new D('/var/lib/lab-report-s
 
 # 用量与限流快照
 curl -s http://127.0.0.1:3000/api/v1/admin/usage -H "Authorization: Bearer $(grep ADMIN_TOKEN /srv/lab-report-server/.env.production | cut -d= -f2)"
+
+# 限流阈值查看 / 热调（BK-006）
+curl -s http://127.0.0.1:3000/api/v1/admin/ratelimits -H "Authorization: Bearer $(grep ADMIN_TOKEN /srv/lab-report-server/.env.production | cut -d= -f2)"
 
 # 实时日志
 pm2 logs lab-report-server --lines 50

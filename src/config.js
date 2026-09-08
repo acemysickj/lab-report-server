@@ -84,3 +84,7 @@ export function byokAllowedFor(allowlist, email) {
 // ---- COM-004：V4 思考模式（deepseek-v4-* 默认开启思考，思考 token 计费且首字延迟分钟级）。
 // 报告写作为直出任务，默认 disabled（快且省）；需要深度推理时设 DEEPSEEK_THINKING_TYPE=enabled ----
 export const DEEPSEEK_THINKING_TYPE = process.env.DEEPSEEK_THINKING_TYPE === 'enabled' ? 'enabled' : 'disabled';
+
+// ---- BK-006：.env.production 绝对路径（限流热配置持久化目标；与 ecosystem.config.cjs 加载路径一致） ----
+// 生产硬编码 /srv/lab-report-server/.env.production；测试可通过 env 或 app options 注入临时路径。
+export const ENV_PRODUCTION_PATH = process.env.ENV_PRODUCTION_PATH ?? '/srv/lab-report-server/.env.production';

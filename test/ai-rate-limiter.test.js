@@ -80,3 +80,38 @@ test('snapshot：供 Admin 用量/限流观测', () => {
   assert.equal(u.minuteCount, 2);
   assert.equal(u.hourCount, 2);
 });
+
+// ---- BK-006：热更新限流阈值 ----
+
+test('updateLimits：部分更新正整数，未提供字段不变；返回更新后全量', () => {
+  const rl = createRateLimiter({ maxConcurrent: 2, perMinute: 10, perHour: 50 });
+  const after = rl.updateLimits({ maxConcurrent: 5 });
+  assert.deepEqual(after, { maxConcurrent: 5, perMinute: 10, perHour: 50 });
+  assert.deepEqual(rl.getLimits(), { maxConcurrent: 5, perMinute: 10, perHour: 50 });
+});
+
+test('updateLimits：忽略非正整数/非整数（0、负数、小数、字符串）', () => {
+  const rl = createRateLimiter({ maxConcurrent: 2, perMinute: 10, perHour: 50 });
+  rl.updateLimits({ maxConcurrent: 0, perMinute: -1, perHour: 1.5 });
+  assert.deepEqual(rl.getLimits(), { maxConcurrent: 2, perMinute: 10, perHour: 50 });
+});
+
+test('updateLimits：热更新后立即生效（并发阈值从 1 提到 3）', () => {
+  const rl = createRateLimiter({ maxConcurrent: 1, perMinute: 99, perHour: 99 });
+  assert.equal(rl.tryAcquire(1).ok, true);
+  assert.equal(rl.tryAcquire(1).ok, false, '并发 1 时第二个被拒');
+  rl.updateLimits({ maxConcurrent: 3 });
+  assert.equal(rl.tryAcquire(1).ok, true, '热更后并发 3，第二个可获取');
+  assert.equal(rl.tryAcquire(1).ok, true, '第三个也可获取');
+  assert.equal(rl.tryAcquire(1).ok, false, '第四个仍被拒（阈值 3）');
+});
+
+test('updateLimits：热更新分钟阈值后窗口计数沿用（不重置窗口）', () => {
+  let now = 6_000_000;
+  const rl = createRateLimiter({ maxConcurrent: 99, perMinute: 2, perHour: 99, now: () => now });
+  rl.tryAcquire(1); rl.release(1);
+  rl.tryAcquire(1); rl.release(1);
+  assert.equal(rl.tryAcquire(1).ok, false, '分钟 2 用完');
+  rl.updateLimits({ perMinute: 5 });
+  assert.equal(rl.tryAcquire(1).ok, true, '热更到 5 后可继续（窗口计数不重置）');
+});

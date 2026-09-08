@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import { httpError } from '../lib/http-error.js';
+import { upsertEnvFile } from '../lib/env-file.js';
 import * as adminRepo from '../repositories/admin.repository.js';
 import { createOrder, getAccount, insertLedgerEntry, setBalance } from '../repositories/wallet.repository.js';
 import { grantCredits, runIdempotent } from '../services/wallet.service.js';
@@ -200,4 +201,62 @@ export default async function adminRoutes(app, { adminToken }) {
       meta: { requestIdHint: 'usage 为进程内环形观测（非计费权威），重启清零' },
     };
   });
+  // ---- BK-006：限流热配置（内存即时生效 + 持久化 .env.production） ----
+
+  app.get('/admin/ratelimits', { preHandler: [guard] }, async () => {
+    return {
+      limits: app.aiRateLimiter.getLimits(),
+      envPath: app.envProductionPath,
+      meta: { note: 'PATCH 同路径热更新；内存即时生效，持久化到 .env.production 后重启不丢' },
+    };
+  });
+
+  app.patch(
+    '/admin/ratelimits',
+    {
+      preHandler: [guard],
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            maxConcurrent: { type: 'integer', minimum: 1 },
+            perMinute: { type: 'integer', minimum: 1 },
+            perHour: { type: 'integer', minimum: 1 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const body = request.body ?? {};
+      const keys = ['maxConcurrent', 'perMinute', 'perHour'];
+      const provided = keys.filter((k) => body[k] !== undefined);
+      if (provided.length === 0) {
+        throw httpError(400, 'empty_patch', '至少提供一个限流字段（maxConcurrent/perMinute/perHour）');
+      }
+      // 1. 内存即时生效
+      const limits = app.aiRateLimiter.updateLimits(body);
+      // 2. 持久化到 .env.production（best-effort：失败不阻断热更，回执 persisted:false + 错误）
+      const envUpdates = {};
+      if (body.maxConcurrent !== undefined) envUpdates.RATE_MAX_CONCURRENT = body.maxConcurrent;
+      if (body.perMinute !== undefined) envUpdates.RATE_PER_MINUTE = body.perMinute;
+      if (body.perHour !== undefined) envUpdates.RATE_PER_HOUR = body.perHour;
+      let persisted = true;
+      let persistError = null;
+      try {
+        upsertEnvFile(app.envProductionPath, envUpdates);
+      } catch (e) {
+        persisted = false;
+        persistError = e.message;
+      }
+      return {
+        limits,
+        persisted,
+        envPath: app.envProductionPath,
+        ...(persistError ? { persistError } : {}),
+      };
+    }
+  );
+
+
 }

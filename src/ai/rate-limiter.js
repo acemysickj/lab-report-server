@@ -10,9 +10,10 @@ const PRUNE_THRESHOLD = 5000; // Map 超过该用户数时清理 1 小时无活�
 
 /** 创建限流器。options: { maxConcurrent, perMinute, perHour, now? }。 */
 export function createRateLimiter(options = {}) {
-  const maxConcurrent = options.maxConcurrent ?? 2;
-  const perMinute = options.perMinute ?? 10;
-  const perHour = options.perHour ?? 50;
+  // BK-006：let 而非 const——支持 updateLimits() 热更新（内存即时生效，无需重启）
+  let maxConcurrent = options.maxConcurrent ?? 2;
+  let perMinute = options.perMinute ?? 10;
+  let perHour = options.perHour ?? 50;
   const now = options.now ?? Date.now;
   /** Map<userId, { concurrent, minuteStart, minuteCount, hourStart, hourCount, lastSeen }> */
   const users = new Map();
@@ -92,6 +93,19 @@ export function createRateLimiter(options = {}) {
         });
       }
       return { activeUsers: usersView.length, users: usersView, limits: { maxConcurrent, perMinute, perHour } };
+    },
+
+    /** 热更新限流阈值（BK-006）。传入部分字段，仅更新提供的正整数；返回更新后全量。 */
+    updateLimits(partial = {}) {
+      if (Number.isInteger(partial.maxConcurrent) && partial.maxConcurrent > 0) maxConcurrent = partial.maxConcurrent;
+      if (Number.isInteger(partial.perMinute) && partial.perMinute > 0) perMinute = partial.perMinute;
+      if (Number.isInteger(partial.perHour) && partial.perHour > 0) perHour = partial.perHour;
+      return { maxConcurrent, perMinute, perHour };
+    },
+
+    /** 读取当前阈值（BK-006）。 */
+    getLimits() {
+      return { maxConcurrent, perMinute, perHour };
     },
   };
 }

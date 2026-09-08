@@ -22,7 +22,7 @@ git fetch --depth 1 origin tag <TAG> && git checkout <TAG>   # 首次直接拉 t
 | `AUTH_JWT_SECRET` | ≥32 字符随机串（`openssl rand -hex 32`），泄露=全体会话可伪造 |
 | `DEEPSEEK_API_KEY` | DeepSeek 平台专用 key（非日常开发 key，只存服务器） |
 | `ADMIN_TOKEN` | ≥16 字符随机串；**未配置=Admin 端点整体 404 隐藏**（发放额度走此令牌） |
-| `RATE_MAX_CONCURRENT` / `RATE_PER_MINUTE` / `RATE_PER_HOUR` | 契约风控默认 2/10/50，后台可调（改 env 重启生效） |
+| `RATE_MAX_CONCURRENT` / `RATE_PER_MINUTE` / `RATE_PER_HOUR` | 契约风控默认 2/10/50。**BK-006 起支持热配置**：`PATCH /api/v1/admin/ratelimits`（Bearer ADMIN_TOKEN）内存即时生效 + 自动持久化 `.env.production`，无需重启；`GET 同路径`查看当前值。改 env 文件后仍需 reload 才生效（热配置已自动写文件） |
 | `AUTH_RATE_PER_MINUTE` / `AUTH_RATE_PER_HOUR` | 认证防爆破：默认 5/30（按 IP，login/register/refresh 共享预算；429 不泄露邮箱存在性）。**前置依赖：Nginx 必须覆写 X-Forwarded-For 为 $remote_addr（见 deploy/ 示例），否则全站共享一个限流桶** |
 | `DEEPSEEK_THINKING_TYPE` | V4 思考模式：默认 `disabled`（报告写作直出，快且省）；`enabled` 开启深度推理（首字延迟分钟级，思考 token 计费，客户端会显示「AI 正在思考」） |
 | `AI_UPSTREAM_TIMEOUT_MS` | 上游超时，默认 300000（5 分钟；思考模式长任务务必放宽） |
