@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { timingSafeEqual, createHash } from 'node:crypto';
 import { httpError } from '../lib/http-error.js';
 import * as adminRepo from '../repositories/admin.repository.js';
-import { createOrder } from '../repositories/wallet.repository.js';
+import { createOrder, getAccount, setBalance, insertLedgerEntry } from '../repositories/wallet.repository.js';
 import { grantCredits, runIdempotent } from '../services/wallet.service.js';
 import { findTier } from '../wallet/pricing.js';
 
@@ -115,6 +115,65 @@ export default async function adminRoutes(app, { adminToken }) {
       if (result.replayed) {
         const fresh = adminRepo.findUserByEmail(app.db, user.email);
         return { userId: user.id, email: user.email, credits: tierInfo.credits, balance: fresh?.balance ?? null, replayed: true };
+      }
+      return result.outcome;
+    }
+  );
+
+  // ---- POST /admin/adjust：额度正负调整（运营者纠错用，走 adjust 流水审计）----
+  // delta 可正可负（0 拒绝）；扣减不足 → 409 insufficient_balance；事务原子；note 必填留痕。
+  app.post(
+    '/admin/adjust',
+    {
+      preHandler: [guard],
+      schema: {
+        body: {
+          type: 'object',
+          required: ['email', 'delta', 'note'],
+          additionalProperties: false,
+          properties: {
+            email: { type: 'string', minLength: 3, maxLength: 254 },
+            delta: { type: 'integer', minimum: -100000, maximum: 100000 },
+            note: { type: 'string', minLength: 2, maxLength: 128 },
+            idempotencyKey: { type: 'string', minLength: 8, maxLength: 128 },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const { email, delta, note, idempotencyKey } = request.body;
+      const user = adminRepo.findUserByEmail(app.db, String(email).trim().toLowerCase());
+      if (!user) throw httpError(404, 'user_not_found', '用户不存在');
+      if (delta === 0) throw httpError(400, 'zero_delta', '调整额度不能为 0');
+
+      const doAdjust = () => {
+        const account = getAccount(app.db, user.id);
+        if (delta < 0 && account.balance + delta < 0) {
+          throw httpError(409, 'insufficient_balance', `余额不足以扣减（当前 ${account.balance}，请求 ${delta}）`);
+        }
+        const balanceAfter = account.balance + delta;
+        insertLedgerEntry(app.db, {
+          userId: user.id,
+          type: 'adjust',
+          delta,
+          balanceAfter,
+          note: `admin adjust: ${note}`,
+        });
+        setBalance(app.db, { userId: user.id, balance: balanceAfter });
+        return { userId: user.id, email: user.email, delta, balance: balanceAfter };
+      };
+
+      if (!idempotencyKey) return doAdjust();
+      const result = runIdempotent(app.db, {
+        userId: user.id,
+        operation: 'admin_adjust',
+        idemKey: idempotencyKey,
+        requestHash: createHash('sha256').update(JSON.stringify([email, delta, note])).digest('hex'),
+        fn: doAdjust,
+      });
+      if (result.replayed) {
+        const fresh = adminRepo.findUserByEmail(app.db, user.email);
+        return { userId: user.id, email: user.email, delta, balance: fresh?.balance ?? null, replayed: true };
       }
       return result.outcome;
     }
