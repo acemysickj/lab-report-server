@@ -88,13 +88,17 @@ server {
 
 ## 6. 定时任务与备份（首次部署后一次性配置）
 
-**SQLite 每日热备**（在线 backup API，不锁库；保留 7 份自动轮转）：
+**SQLite 每日热备**（在线 backup API，不锁库；保留 14 份滚动（BKP-001 ≥14 天）；备份即
+PRAGMA integrity_check 校验，坏档以非零码告警进日志）：
 
 ```bash
-sudo crontab -e -u labreport
-# 每日 04:20 备份：
-20 4 * * * cd /srv/lab-report-server && /home/labreport/.nvm/versions/node/*/bin/node scripts/backup-db.js >> /var/log/lab-report-server/backup.log 2>&1
+crontab -e   # labreport 自身 crontab，无需 sudo；实际条目见 runbooks/ops/数据备份与恢复.md
+# 每日 04:20 备份（保留 14 份）：
+20 4 * * * cd /srv/lab-report-server && node scripts/backup-db.js --keep 14 >> /var/log/lab-report-server/backup.log 2>&1
 ```
+
+**异地副本（BKP-001）**：运营者本机每日 13:00 定时拉取最新备份（Windows 计划任务 + scp；
+拉取脚本与本机副本目录见 CP runbooks/ops/数据备份与恢复.md）。
 
 **日志轮转**（PM2 自身输出）：
 

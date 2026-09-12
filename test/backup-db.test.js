@@ -1,4 +1,4 @@
-// test/backup-db.test.js — SQLite 热备脚本：快照含数据 + 轮转保留 N 份 + 缺源报错
+// test/backup-db.test.js — SQLite 热备脚本：快照含数据 + 完整性校验（BKP-001）+ 轮转保留 N 份 + 缺源报错
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -27,6 +27,10 @@ test('backup：快照文件可读且包含生产数据', async () => {
   const row = restored.prepare('SELECT note FROM demo').get();
   restored.close();
   assert.equal(row.note, 'prod-data-marker');
+  // BKP-001：备份即验证——integrity ok + 表计数随返回值
+  assert.equal(r.verification.integrity, 'ok');
+  assert.equal(r.verification.tableCount, 1);
+  assert.ok(r.verification.tables.includes('demo'));
 });
 
 test('轮转：超过 keep 份数时删除最旧', async () => {

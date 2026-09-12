@@ -1,9 +1,10 @@
-// scripts/backup-db.js — SQLite 在线热备 + 轮转（COM-005 运维）
+// scripts/backup-db.js — SQLite 在线热备 + 轮转 + 完整性校验（COM-005 运维 / BKP-001）
 // 用法：
 //   node scripts/backup-db.js [--out <目录>] [--keep <份数>]
-// 默认：DATA_DIR 取运行环境（生产 /var/lib/lab-report-server），输出 /var/backups/lab-report-server，
-// 保留最近 7 份。cron 建议：每天一次（见 docs/DEPLOY.md §6）。
+// 默认：DATA_DIR 取运行环境（生产 /srv/lab-report-server/data），输出 /var/lib/lab-report-server/backups，
+// 保留最近 14 份（BKP-001：≥14 天滚动）。cron 建议：每天一次（见 docs/DEPLOY.md §6）。
 // 使用 better-sqlite3 在线 backup API：WAL 库不锁库、备份即一致性快照。
+// BKP-001：备份后立即 PRAGMA integrity_check + 表计数——坏档当场发现、以非零码告警，不静默堆积。
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,8 +12,27 @@ import Database from 'better-sqlite3';
 import { resolveDataDir, DB_FILENAME } from '../src/db.js';
 
 const BACKUP_FILENAME_PREFIX = 'lab-report-server-';
+export const BACKUP_KEEP_DEFAULT = 14; // BKP-001：≥14 天滚动
 
-export async function backupDatabase({ dataDir, outDir, keep = 7, now = new Date() } = {}) {
+/** 备份文件可用性验证：integrity_check 必须为 ok + sqlite_master 可读。返回表清单。 */
+export function verifyBackupFile(destPath) {
+  const db = new Database(destPath, { readonly: true });
+  try {
+    const integrity = db.pragma('integrity_check', { simple: true }); // 'ok' 或错误行
+    if (integrity !== 'ok') {
+      throw new Error(`integrity_check 失败：${integrity}`);
+    }
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .all()
+      .map((r) => r.name);
+    return { integrity, tableCount: tables.length, tables };
+  } finally {
+    db.close();
+  }
+}
+
+export async function backupDatabase({ dataDir, outDir, keep = BACKUP_KEEP_DEFAULT, now = new Date() } = {}) {
   const srcPath = path.join(resolveDataDir(dataDir), DB_FILENAME);
   if (!fs.existsSync(srcPath)) {
     throw new Error(`源数据库不存在：${srcPath}`);
@@ -30,8 +50,9 @@ export async function backupDatabase({ dataDir, outDir, keep = 7, now = new Date
     src.close();
   }
 
+  const verification = verifyBackupFile(dest); // 坏档当场发现（integrity_check 非 ok 抛错）
   const rotated = rotateOld(destDir, keep);
-  return { dest, size: fs.statSync(dest).size, removed: rotated };
+  return { dest, size: fs.statSync(dest).size, removed: rotated, verification };
 }
 
 /** 按 mtime 保留最新 keep 份（含本次），更旧的删除。返回删除数。 */
@@ -57,10 +78,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const keepIdx = args.indexOf('--keep');
   backupDatabase({
     outDir: outIdx >= 0 ? args[outIdx + 1] : undefined,
-    keep: keepIdx >= 0 ? Number.parseInt(args[keepIdx + 1], 10) : 7,
+    keep: keepIdx >= 0 ? Number.parseInt(args[keepIdx + 1], 10) : BACKUP_KEEP_DEFAULT,
   })
     .then((r) => {
-      console.log(`备份完成: ${r.dest}（${(r.size / 1024).toFixed(1)} KiB），轮转删除 ${r.removed} 份旧备份`);
+      console.log(
+        `备份完成: ${r.dest}（${(r.size / 1024).toFixed(1)} KiB），完整性 ok（${r.verification.tableCount} 张表），轮转删除 ${r.removed} 份旧备份`
+      );
     })
     .catch((e) => {
       console.error('备份失败:', e.message);
