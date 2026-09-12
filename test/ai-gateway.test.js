@@ -17,6 +17,7 @@ import { createOrder } from '../src/repositories/wallet.repository.js';
 import { grantCredits, getWalletState, listLedger } from '../src/services/wallet.service.js';
 import { compensate } from '../src/services/ai-gateway.service.js';
 import { PRICING } from '../src/wallet/pricing.js';
+import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 const TEST_PASSWORD = ['password1', '23'].join('');
 const SENTINEL = 'SENTINEL_BODY_9f3a不要落盘';
@@ -73,8 +74,8 @@ async function registerLoginFund(app, email = 'ai@test.dev', credits = 100) {
       consent: {
         acceptedPrivacyPolicy: true,
         acceptedTermsOfService: true,
-        privacyPolicyVersion: 'v1.0',
-        termsVersion: 'v1.0',
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        termsVersion: TERMS_VERSION,
       },
     },
   });
@@ -425,8 +426,8 @@ test('status endpoint: view has no content; 401 unauth; 404 hides others', async
         consent: {
           acceptedPrivacyPolicy: true,
           acceptedTermsOfService: true,
-          privacyPolicyVersion: 'v1.0',
-          termsVersion: 'v1.0',
+          privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+          termsVersion: TERMS_VERSION,
         },
       },
     });

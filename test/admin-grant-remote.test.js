@@ -8,6 +8,7 @@ import path from 'node:path';
 import { buildApp } from '../src/app.js';
 import { migrate } from '../scripts/migrate.js';
 import { grantRemote, pickTier } from '../scripts/admin-grant.mjs';
+import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 const TEST_PASSWORD = ['pass', 'word123'].join('');
 const TOKEN = 'admin-grant-test-0123456789abcdef';
@@ -28,7 +29,7 @@ async function register(app, email) {
     payload: {
       email,
       password: TEST_PASSWORD,
-      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: 'v1.0', termsVersion: 'v1.0' },
+      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: PRIVACY_POLICY_VERSION, termsVersion: TERMS_VERSION },
     },
   });
   assert.equal(reg.statusCode, 201);

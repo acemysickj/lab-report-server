@@ -9,6 +9,7 @@ import { buildApp } from '../src/app.js';
 import { migrate } from '../scripts/migrate.js';
 import { createOrder } from '../src/repositories/wallet.repository.js';
 import { grantCredits } from '../src/services/wallet.service.js';
+import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 const TEST_PASSWORD = ['password1', '23'].join('');
 const SENTINEL_TOKEN = ['admin-token-test-', '0123456789abcdef'].join('');
@@ -29,7 +30,7 @@ async function makeUser(app, email, credits = 0) {
     payload: {
       email,
       password: TEST_PASSWORD,
-      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: 'v1.0', termsVersion: 'v1.0' },
+      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: PRIVACY_POLICY_VERSION, termsVersion: TERMS_VERSION },
     },
   });
   const userId = res.statusCode === 201 ? res.json().userId : null;

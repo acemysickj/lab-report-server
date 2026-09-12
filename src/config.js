@@ -7,8 +7,9 @@ export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;        // 15 min（契约）
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 d（契约）
 
 // 法务文档版本（P-002 勾选追溯锚点；文档修订时同步递增，见 docs/legal/registration-summary.md 第三节）
+// v1.1（2026-09-12）：服务协议价格档位降敏（收费细节改为以客户端展示为准），注册页经 consent-versions 自动适配
 export const PRIVACY_POLICY_VERSION = 'v1.0';
-export const TERMS_VERSION = 'v1.0';
+export const TERMS_VERSION = 'v1.1';
 
 export const LEGAL_DOCS_DIR = process.env.LEGAL_DOCS_DIR
   ? path.resolve(process.env.LEGAL_DOCS_DIR)

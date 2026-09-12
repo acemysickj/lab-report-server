@@ -18,6 +18,7 @@ import {
 } from '../src/services/wallet.service.js';
 import { createOrder, getOrder } from '../src/repositories/wallet.repository.js';
 import { OPERATIONS, TIERS, PRICING } from '../src/wallet/pricing.js';
+import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 async function makeApp() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-wallet-'));
@@ -36,8 +37,8 @@ async function registerAndLogin(app, email = 'w@test.dev') {
       consent: {
         acceptedPrivacyPolicy: true,
         acceptedTermsOfService: true,
-        privacyPolicyVersion: 'v1.0',
-        termsVersion: 'v1.0',
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        termsVersion: TERMS_VERSION,
       },
     },
   });

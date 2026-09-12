@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../src/app.js';
 import { migrate } from '../scripts/migrate.js';
-import { parseByokAllowlist, byokAllowedFor } from '../src/config.js';
+import { parseByokAllowlist, byokAllowedFor, PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 const PASSWORD = 'password123';
 
@@ -30,8 +30,8 @@ async function register(app, email) {
       consent: {
         acceptedPrivacyPolicy: true,
         acceptedTermsOfService: true,
-        privacyPolicyVersion: 'v1.0',
-        termsVersion: 'v1.0',
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION,
+        termsVersion: TERMS_VERSION,
       },
     },
   });

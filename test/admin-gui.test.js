@@ -7,6 +7,7 @@ import path from 'node:path';
 import { buildApp } from '../src/app.js';
 import { migrate } from '../scripts/migrate.js';
 import { createGuiServer } from '../scripts/admin-gui.mjs';
+import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
 
 const TOKEN = 'admin-gui-test-0123456789abcdef';
 const TEST_PASSWORD = ['pass', 'word123'].join('');
@@ -21,7 +22,7 @@ async function makeStack() {
     payload: {
       email: 'buyer@test.dev',
       password: TEST_PASSWORD,
-      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: 'v1.0', termsVersion: 'v1.0' },
+      consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: PRIVACY_POLICY_VERSION, termsVersion: TERMS_VERSION },
     },
   });
   await app.listen({ host: '127.0.0.1', port: 0 });
