@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildApp } from '../src/app.js';
 
-test('GET /legal/privacy renders HTML with P-004 third-party disclosure', async () => {
+test('GET /legal/privacy renders HTML with P-004 disclosure and tables (§2/§3)', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lrs-legal-'));
   const app = await buildApp({ dataDir: tmp });
   try {
@@ -16,7 +16,12 @@ test('GET /legal/privacy renders HTML with P-004 third-party disclosure', async 
     assert.ok(res.body.includes('<h1>'), '标题渲染为 HTML');
     assert.ok(res.body.includes('隐私政策'));
     assert.ok(res.body.includes('DeepSeek'), 'P-004 third-party AI disclosure present');
+    assert.ok(res.body.includes('<table>'), '§2/§3 管道表渲染');
+    assert.ok(res.body.includes('<th>'), '表头渲染');
     assert.ok(!/[«]|(^|\n)#{1,3}\s/.test(res.body.replace(/<[^>]+>/g, '')), '无裸 md 标题符号残留');
+    const visible = res.body.replace(/<[^>]+>/g, '');
+    assert.ok(!/\|\s*---/.test(visible), '无裸管道表分隔行');
+    assert.ok(!/文档版本：/.test(visible), '版本元信息行不出现在公开页面（用户 2026-09-13 反馈）');
     assert.ok(res.body.includes('粤ICP备2026135392号'), '备案号页脚（DOM-001 口径）');
   } finally {
     await app.close();
@@ -33,15 +38,18 @@ test('GET /legal/terms renders v1.1 HTML: no bare md symbols, raw escape hatch k
     assert.match(res.headers['content-type'], /text\/html/);
     assert.ok(res.body.includes('<h1>'));
     assert.ok(res.body.includes('<strong>'), '粗体渲染');
-    assert.ok(res.body.includes('v1.1'), 'DOM-003：v1.1 生效');
+    assert.ok(!/文档版本：/.test(res.body.replace(/<[^>]+>/g, '')), '版本元信息不出现在公开页面');
     assert.ok(res.body.includes('理解并同意'), '用户权威文本对齐（product 比对点）');
     const visible = res.body.replace(/<[^>]+>/g, '');
     assert.ok(!/\*\*|^#{1,3}\s/m.test(visible), '无裸 **/## md 源码符号');
+    assert.ok(!/文档版本：/.test(visible), '版本元信息不出现在公开页面');
+    assert.ok(visible.includes('所同意的文档版本及相应时间'), '正文句中提及「文档版本」不受过滤影响');
 
     const raw = await app.inject({ method: 'GET', url: '/legal/terms?format=raw' });
     assert.equal(raw.statusCode, 200);
     assert.match(raw.headers['content-type'], /text\/markdown/);
     assert.ok(raw.body.startsWith('# '));
+    assert.ok(raw.body.includes('文档版本：v1.1'), 'raw 出口保留版本元数据（内部追溯用）');
   } finally {
     await app.close();
     fs.rmSync(tmp, { recursive: true, force: true });

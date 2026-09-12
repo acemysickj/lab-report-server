@@ -31,6 +31,9 @@ const PAGE_CSS = `
   a { color: #06c; text-decoration: none; }
   a:hover { text-decoration: underline; }
   hr { border: 0; border-top: 1px solid #e8e8ed; margin: 24px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { border: 1px solid #e8e8ed; padding: 8px 10px; text-align: left; vertical-align: top; line-height: 1.6; }
+  th { background: #f5f5f7; font-weight: 600; }
   footer { border-top: 1px solid #e8e8ed; padding: 20px 24px; text-align: center; font-size: 12px; color: #86868b; }
   footer a { color: #86868b; }
   footer a:hover { text-decoration: underline; }
@@ -64,6 +67,15 @@ function readLegalDoc(filename) {
   }
 }
 
+// 版本元信息行（文首「文档版本：…」）只入 .md 源（内部追溯），不出现在公开页面；
+// 权威版本锚点 = config.js TERMS_VERSION/PRIVACY_POLICY_VERSION（P-002）。
+// 只滤「行首」形态（可选 -/*/​** 前缀），正文句中提及「文档版本」不受影响（terms 2.4 / privacy 107）。
+const VERSION_META_LINE = /^\s*(?:[-*]\s*)?(?:\*\*)?\s*文档版本：/;
+
+function stripVersionMeta(markdown) {
+  return markdown.split('\n').filter((l) => !VERSION_META_LINE.test(l)).join('\n');
+}
+
 function serveLegalDoc(filename, title) {
   return (request, reply) => {
     const markdown = readLegalDoc(filename);
@@ -72,7 +84,7 @@ function serveLegalDoc(filename, title) {
       return reply.send(markdown);
     }
     reply.header('content-type', 'text/html; charset=utf-8');
-    return reply.send(renderPage(title, markdownToHtml(markdown)));
+    return reply.send(renderPage(title, markdownToHtml(stripVersionMeta(markdown))));
   };
 }
 

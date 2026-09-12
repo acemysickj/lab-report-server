@@ -23,7 +23,22 @@ function renderInline(text) {
   return s;
 }
 
-/** 块级转换：逐行状态机，支持 h1-h3/ul/ol/blockquote/hr/段落。h4+ 法律文档未用，按段落处理。 */
+// ---- GFM 管道表（隐私政策 §2/§3）----
+
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+
+function isTableSeparator(line) {
+  if (typeof line !== 'string' || !line.includes('|')) return false;
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c)); // GFM：≥1 个 -
+}
+
+/** 块级转换：逐行状态机，支持 h1-h3/ul/ol/blockquote/hr/管道表/段落。h4+ 法律文档未用，按段落处理。 */
 export function markdownToHtml(markdown) {
   const lines = String(markdown ?? '').replace(/\r\n/g, '\n').split('\n');
   const out = [];
@@ -43,11 +58,30 @@ export function markdownToHtml(markdown) {
     }
   };
 
-  for (const raw of lines) {
-    const line = raw.trimEnd();
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trimEnd();
     if (!line.trim()) {
       flushParagraph();
       closeList();
+      continue;
+    }
+    // 管道表：本行含 | 且下一行是分隔行（|---|---|）→ 整表消费
+    if (line.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+      flushParagraph();
+      closeList();
+      const header = splitTableRow(line);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].trim() && lines[j].includes('|')) {
+        rows.push(splitTableRow(lines[j]));
+        j++;
+      }
+      const th = header.map((c) => `<th>${renderInline(c)}</th>`).join('');
+      const trs = rows
+        .map((r) => `<tr>${header.map((_, idx) => `<td>${renderInline(r[idx] ?? '')}</td>`).join('')}</tr>`)
+        .join('');
+      out.push(`<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`);
+      i = j - 1;
       continue;
     }
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);
