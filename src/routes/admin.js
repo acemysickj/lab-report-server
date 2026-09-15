@@ -39,6 +39,11 @@ export default async function adminRoutes(app, { adminToken }) {
     return adminRepo.overview(app.db);
   });
 
+  // PROMO-001：推广数据观测（注册今日/昨日/累计+7 日趋势；发放笔数金额）。CST 划日。
+  app.get('/admin/stats', { preHandler: [guard] }, async () => {
+    return adminRepo.stats(app.db);
+  });
+
   app.get(
     '/admin/users',
     {

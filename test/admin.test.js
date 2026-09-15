@@ -318,3 +318,89 @@ test('ratelimits PATCH：持久化失败（不可写路径）不阻断热更，�
     assert.equal(res.json().limits.maxConcurrent, 4, '内存仍已更新');
   } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); fs.rmSync(blockerDir, { recursive: true, force: true }); }
 });
+
+// ---- PROMO-001：/admin/stats 推广观测 + listUsers 对账字段 ----
+
+const CST_MS = 8 * 3600 * 1000;
+function cstDayRange(date) {
+  const shifted = new Date(date.getTime() + CST_MS);
+  const start = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - CST_MS;
+  return { start: new Date(start).toISOString(), end: new Date(start + 24 * 3600 * 1000).toISOString() };
+}
+
+test('stats：空库全零 + 7 日趋势结构（PROMO-001）', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers: { authorization: `Bearer ${SENTINEL_TOKEN}` } });
+    assert.equal(res.statusCode, 200);
+    const view = res.json();
+    assert.equal(view.registrations.today, 0);
+    assert.equal(view.registrations.yesterday, 0);
+    assert.equal(view.registrations.total, 0);
+    assert.equal(view.registrations.trend7d.length, 7);
+    assert.ok(view.registrations.trend7d.every((d) => d.count === 0 && /^\d{4}-\d{2}-\d{2}$/.test(d.date)));
+    assert.equal(view.grants.today.count, 0);
+    assert.equal(view.grants.today.amountCents, 0);
+    assert.equal(view.grants.total.count, 0);
+    assert.equal(view.tz, 'UTC+8');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('stats：今日注册/昨日注册跨日边界 + 发放笔数金额联 orders（PROMO-001）', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    const now = new Date(); // 注入口径：注册走真实 now，跨日用 SQL 改 created_at 模拟
+    await makeUser(app, 's1@test.dev', 0); // 今日注册，未付费
+    await makeUser(app, 's2@test.dev', 100); // 今日注册 + tier_9_9 发放
+
+    // s1 的 created_at 挪到昨日 CST 23:30（跨日边界：仍属昨日，不并入今日）
+    const yRange = cstDayRange(new Date(now.getTime() - 24 * 3600 * 1000));
+    const yesterdayLate = new Date(new Date(yRange.end).getTime() - 30 * 60 * 1000).toISOString();
+    app.db.prepare("UPDATE users SET created_at = ? WHERE email = 's1@test.dev'").run(yesterdayLate);
+
+    // 边界正例：精确落在今日 CST 零点的用户计入今日（>= start）
+    const tRange = cstDayRange(now);
+    await app.inject({
+      method: 'POST', url: '/api/v1/auth/register',
+      payload: { email: 's3@test.dev', password: 'password123', consent: { acceptedPrivacyPolicy: true, acceptedTermsOfService: true, privacyPolicyVersion: PRIVACY_POLICY_VERSION, termsVersion: TERMS_VERSION } },
+    });
+    app.db.prepare("UPDATE users SET created_at = ? WHERE email = 's3@test.dev'").run(tRange.start);
+
+    const headers = { authorization: `Bearer ${SENTINEL_TOKEN}` };
+    const res = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers });
+    assert.equal(res.statusCode, 200);
+    const view = res.json();
+    assert.equal(view.registrations.today, 2, 's2 今日 + s3 零点边界');
+    assert.equal(view.registrations.yesterday, 1, 's1 昨日 23:30');
+    assert.equal(view.registrations.total, 3);
+    const byDate = Object.fromEntries(view.registrations.trend7d.map((d) => [d.date, d.count]));
+    assert.equal(byDate[view.registrations.trend7d[6].date], 2, '趋势末日=今日');
+    assert.ok(Object.values(byDate).reduce((a, b) => a + b, 0) >= 3, '7 日趋势覆盖全部造数');
+
+    const adminGrantRemote = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers });
+    const grants = adminGrantRemote.json().grants;
+    assert.equal(grants.today.count, 1, '一笔发放');
+    assert.equal(grants.today.amountCents, 990, '金额=tier_9_9 实价');
+    assert.equal(grants.total.count, 1);
+
+    const noToken = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers: { authorization: 'Bearer wrong' } });
+    assert.equal(noToken.statusCode, 401);
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('listUsers 扩展对账字段：purchaseCount / lastActivityAt（PROMO-001）', async () => {
+  const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
+  try {
+    await makeUser(app, 'paid@test.dev', 100); // 有发放流水
+    await makeUser(app, 'free@test.dev', 0);
+    const res = await app.inject({ method: 'GET', url: '/api/v1/admin/users', headers: { authorization: `Bearer ${SENTINEL_TOKEN}` } });
+    const { users } = res.json();
+    const paid = users.find((u) => u.email === 'paid@test.dev');
+    const free = users.find((u) => u.email === 'free@test.dev');
+    assert.equal(paid.purchaseCount, 1);
+    assert.ok(paid.lastActivityAt, '有最近活动时间');
+    assert.equal(free.purchaseCount, 0);
+    assert.equal(free.lastActivityAt, null);
+    assert.ok(!('password_hash' in paid), '不泄露哈希');
+  } finally { await app.close(); fs.rmSync(tmp, { recursive: true, force: true }); }
+});
