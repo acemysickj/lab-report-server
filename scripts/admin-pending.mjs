@@ -7,9 +7,13 @@
 // 安全口径同 admin-grant.mjs：ADMIN_TOKEN 只在本机交互输入，不持久化。
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const PAGE_SIZE = 100; // /admin/users 上限=100（路由 schema maximum），分页口径唯一来源
 
 /** 非交互核心（可测试）：单页拉取。 */
-export async function fetchUsersPage({ serverUrl, token, limit = 100, beforeId }) {
+export async function fetchUsersPage({ serverUrl, token, limit = PAGE_SIZE, beforeId }) {
   const url = new URL('/api/v1/admin/users', serverUrl.replace(/\/+$/, ''));
   url.searchParams.set('limit', String(limit));
   if (beforeId) url.searchParams.set('beforeId', String(beforeId));
@@ -26,8 +30,8 @@ export async function fetchAllUsers({ serverUrl, token }) {
   for (;;) {
     const page = await fetchUsersPage({ serverUrl, token, beforeId });
     all.push(...page);
-    if (page.length < 100) return all;
-    beforeId = page[page.length - 1].id;
+    if (page.length < PAGE_SIZE) return all;
+    beforeId = page[page.length - 1].id; // 服务端按 id DESC 返回：尾项=本页最小 id
   }
 }
 
@@ -60,8 +64,9 @@ function printList(title, rows, cols) {
   }
 }
 
-// CLI 入口（被 import 测试时不执行）
-if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || process.argv[1].endsWith('admin-pending.mjs')) {
+// CLI 入口（被 import 测试时不执行）；入口判定照 backup-db.js 先例（pathToFileURL + resolve，
+// Windows 下手工拼 file:// 会恒假）
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const serverUrl = process.argv[2] || 'https://lab-report.top';
   const rl = readline.createInterface({ input: stdin, output: stdout });
   const token = await rl.question('ADMIN_TOKEN: ');

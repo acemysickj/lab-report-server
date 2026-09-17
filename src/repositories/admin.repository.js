@@ -1,5 +1,5 @@
 // src/repositories/admin.repository.js — Admin 只读聚合查询（COM-005 / PROMO-001）
-// 全部参数化查询（无字符串拼接）；只读，写路径仅 grant/adjust（走 wallet.service 既有事务）。
+// 绑定值全部参数化（模板插值仅限静态 SQL 片段，不含任何运行时输入）；只读，写路径仅 grant/adjust（走 wallet.service 既有事务）。
 
 // ---- 时区口径（PROMO-001）：运营/推广数据按中国标准时间 CST=UTC+8 划日（无夏令时） ----
 const CST_OFFSET_MS = 8 * 3600 * 1000;

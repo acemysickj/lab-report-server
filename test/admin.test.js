@@ -10,6 +10,7 @@ import { migrate } from '../scripts/migrate.js';
 import { createOrder } from '../src/repositories/wallet.repository.js';
 import { grantCredits } from '../src/services/wallet.service.js';
 import { PRIVACY_POLICY_VERSION, TERMS_VERSION } from '../src/config.js';
+import { cstDayRange } from '../src/repositories/admin.repository.js';
 
 const TEST_PASSWORD = ['password1', '23'].join('');
 const SENTINEL_TOKEN = ['admin-token-test-', '0123456789abcdef'].join('');
@@ -321,13 +322,6 @@ test('ratelimits PATCH：持久化失败（不可写路径）不阻断热更，�
 
 // ---- PROMO-001：/admin/stats 推广观测 + listUsers 对账字段 ----
 
-const CST_MS = 8 * 3600 * 1000;
-function cstDayRange(date) {
-  const shifted = new Date(date.getTime() + CST_MS);
-  const start = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - CST_MS;
-  return { start: new Date(start).toISOString(), end: new Date(start + 24 * 3600 * 1000).toISOString() };
-}
-
 test('stats：空库全零 + 7 日趋势结构（PROMO-001）', async () => {
   const { app, tmp } = await makeApp({ adminToken: SENTINEL_TOKEN });
   try {
@@ -377,8 +371,8 @@ test('stats：今日注册/昨日注册跨日边界 + 发放笔数金额联 orde
     assert.equal(byDate[view.registrations.trend7d[6].date], 2, '趋势末日=今日');
     assert.ok(Object.values(byDate).reduce((a, b) => a + b, 0) >= 3, '7 日趋势覆盖全部造数');
 
-    const adminGrantRemote = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers });
-    const grants = adminGrantRemote.json().grants;
+    const statsRes = await app.inject({ method: 'GET', url: '/api/v1/admin/stats', headers });
+    const grants = statsRes.json().grants;
     assert.equal(grants.today.count, 1, '一笔发放');
     assert.equal(grants.today.amountCents, 990, '金额=tier_9_9 实价');
     assert.equal(grants.total.count, 1);
